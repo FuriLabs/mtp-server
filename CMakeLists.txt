@@ -13,6 +13,7 @@ set(MTP_VERSION_MINOR 0)
 set(MTP_VERSION_PATCH 0)
 
 find_package(Boost REQUIRED COMPONENTS thread system filesystem)
+pkg_check_modules(DBUSCPP REQUIRED dbus-cpp)
 pkg_check_modules(GLOG REQUIRED libglog)
 
 set(
