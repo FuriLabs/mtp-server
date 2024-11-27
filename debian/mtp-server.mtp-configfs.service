@@ -2,12 +2,17 @@
 Description=Manage USB state changes between RNDIS, MTP and None (disable configfs)
 Requires=lxc@android.service
 After=lxc@android.service
+StartLimitBurst=5000
+StartLimitIntervalSec=0
 
 [Service]
 Type=dbus
 BusName=io.FuriOS.USBConfig
 ExecStartPre=-/usr/bin/chown furios:furios /dev/mtp_usb
 ExecStart=/usr/sbin/mtp-configfs
+RestartSec=1
+TimeoutStartSec=5
+Restart=always
 
 [Install]
 WantedBy=graphical.target
