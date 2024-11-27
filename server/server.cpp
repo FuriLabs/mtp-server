@@ -77,6 +77,30 @@ struct Login1Session {
         };
     };
 };
+
+struct Login1Manager {
+    struct Interface {
+        inline static std::string& name() {
+            static std::string s("org.freedesktop.login1.Manager");
+            return s;
+        }
+    };
+
+    struct ListSessionsEx {
+        typedef Login1Manager Interface;
+
+        static const std::string& name() {
+            static const std::string s {
+                "ListSessionsEx"
+            };
+
+            return s;
+        }
+
+        inline static const std::chrono::milliseconds default_timeout() { return std::chrono::seconds{1}; }
+    };
+};
+
 }
 
 namespace core {
@@ -91,6 +115,17 @@ struct Service<core::Login1Session> {
         return s;
     }
 };
+
+template<>
+struct Service<core::Login1Manager> {
+    inline static const std::string& interface_name() {
+        static const std::string s {
+            "org.freedesktop.login1.Manager"
+        };
+        return s;
+    }
+};
+
 }
 }
 }
@@ -237,20 +272,44 @@ private:
             bus->install_executor(core::dbus::asio::make_executor(bus));
 
             auto login1_service = dbus::Service::use_service(bus, "org.freedesktop.login1");
+            auto login1_manager = login1_service->object_for_path(dbus::types::ObjectPath("/org/freedesktop/login1"));
 
-            const char* xdg_session_id = "c3"; // this should be evaluated from ListSessions TTY=tty7
+            const char* xdg_session_id = nullptr;
 
-            std::string session_path = "/org/freedesktop/login1/session/" + std::string(xdg_session_id);
-            auto session = login1_service->object_for_path(dbus::types::ObjectPath(session_path));
+            using sessionTypeEx = std::vector<dbus::types::Struct<std::tuple<std::string, uint32_t, std::string, std::string, uint32_t, std::string, std::string, bool, uint64_t, dbus::types::ObjectPath>>>;
+            auto sessions = login1_manager->invoke_method_synchronously<core::Login1Manager::ListSessionsEx, sessionTypeEx>();
 
-            // Get the LockedHint property
-            locked_hint = session->get_property<core::Login1Session::Properties::LockedHint>();
-            screen_locked = locked_hint->get();
+            struct SessionInfo
+            {
+                std::string session_id;
+                std::string tty;
+            };
 
-            // Monitor for changes
-            locked_hint->changed().connect([this](bool locked) {
-                handle_lock_state(locked);
-            });
+            for (const auto& session : sessions.value()) {
+                SessionInfo sessionInfo;
+                std::tie(sessionInfo.session_id, std::ignore, std::ignore, std::ignore, std::ignore, std::ignore, sessionInfo.tty, std::ignore, std::ignore, std::ignore) = session.value;
+
+                if (sessionInfo.tty == "tty7") {
+                    xdg_session_id = sessionInfo.session_id.c_str();
+                    break;
+                }
+            }
+
+            if (xdg_session_id != nullptr) {
+                std::string session_path = "/org/freedesktop/login1/session/" + std::string(xdg_session_id);
+                auto session = login1_service->object_for_path(dbus::types::ObjectPath(session_path));
+
+                // Get the LockedHint property
+                locked_hint = session->get_property<core::Login1Session::Properties::LockedHint>();
+                screen_locked = locked_hint->get();
+
+                // Monitor for changes
+                locked_hint->changed().connect([this](bool locked) {
+                    handle_lock_state(locked);
+                });
+            } else {
+                std::cerr << "Error: xdg_session_id is null" << std::endl;
+            }
         } catch (const std::exception& e) {
             LOG(ERROR) << "Failed to setup logind monitor: " << e.what();
         }
