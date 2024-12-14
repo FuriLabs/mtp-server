@@ -33,20 +33,8 @@ static const gchar introspection_xml[] =
   "</node>";
 
 static void
-cleanup_configfs ()
+setup_configfs ()
 {
-  unlink (GADGETDIR "/configs/" CONFIGNAME "/" MTPCONFIG);
-  unlink (GADGETDIR "/configs/" CONFIGNAME "/" RNDISCONFIG);
-  unlink (GADGETDIR "/configs/" CONFIGNAME "/rndis.usb0");
-  unlink (GADGETDIR "/configs/" CONFIGNAME "/rndis_bam.rndis");
-  unlink (GADGETDIR "/configs/" CONFIGNAME "/rndis.0");
-}
-
-static void
-configure_mtp ()
-{
-  g_print ("Configuring for mode MTP\n");
-
   // Mount configfs if not already mounted
   if (access (CONFIGFS, F_OK) == -1) {
     if (mount ("none", CONFIGFS, "configfs", 0, NULL) == -1) {
@@ -55,16 +43,41 @@ configure_mtp ()
     }
   }
 
+  mkdir (USBGADGET, 0755);
+  mkdir (GADGETDIR, 0755);
+
   mkdir (GADGETDIR "/strings/0x409", 0755);
+
+  mkdir (GADGETDIR "/functions", 0755);
   mkdir (GADGETDIR "/functions/" RNDISCONFIG, 0755);
-  mkdir (GADGETDIR "/functions/rndis.usb0", 0755);
-  mkdir (GADGETDIR "/functions/rndis_bam.rndis", 0755);
+  mkdir (GADGETDIR "/functions/" RNDISBAMCONFIG, 0755);
+
+  mkdir (GADGETDIR "/configs", 0755);
+  mkdir (GADGETDIR "/configs/" CONFIGNAME, 0755);
+  mkdir (GADGETDIR "/configs/" CONFIGNAME "/strings", 0755);
   mkdir (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409", 0755);
 
   write_to_file (GADGETDIR "/idVendor", IDVENDOR);
   write_to_file (GADGETDIR "/idProduct", IDPRODUCT);
   write_to_file (GADGETDIR "/bcdDevice", BCDDEVICE);
   write_to_file (GADGETDIR "/bcdUSB", BCDUSB);
+}
+
+static void
+cleanup_configfs ()
+{
+  unlink (GADGETDIR "/configs/" CONFIGNAME "/" MTPCONFIG);
+  unlink (GADGETDIR "/configs/" CONFIGNAME "/" RNDISCONFIG);
+  unlink (GADGETDIR "/configs/" CONFIGNAME "/" RNDISBAMCONFIG);
+}
+
+static void
+configure_mtp ()
+{
+  g_print ("Configuring for mode MTP\n");
+
+  setup_configfs ();
+
   write_to_file (GADGETDIR "/os_desc/use", "1");
   write_to_file (GADGETDIR "/os_desc/b_vendor_code", "0x1");
   write_to_file (GADGETDIR "/os_desc/qw_sign", "MSFT100");
@@ -89,8 +102,8 @@ configure_mtp ()
   chown (GADGETDIR, 0, getgrnam ("plugdev")->gr_gid);
   chown (GADGETDIR "/configs", 0, getgrnam ("plugdev")->gr_gid);
   chown (GADGETDIR "/configs/" CONFIGNAME, 0, getgrnam ("plugdev")->gr_gid);
-  chown ("/dev/mtp_usb", 0, getgrnam ("plugdev")->gr_gid);
-  chmod ("/dev/mtp_usb", 0660);
+  chown (MTP_USB, 0, getgrnam ("plugdev")->gr_gid);
+  chmod (MTP_USB, 0660);
 
   cleanup_configfs ();
 
@@ -108,20 +121,14 @@ configure_rndis ()
 {
   g_print ("Configuring for mode RNDIS\n");
 
+  setup_configfs ();
+
   cleanup_configfs ();
 
-  mkdir (GADGETDIR "/functions/" RNDISCONFIG, 0755);
-
-  write_to_file (GADGETDIR "/idVendor", IDVENDOR);
-  write_to_file (GADGETDIR "/idProduct", IDPRODUCT);
-  write_to_file (GADGETDIR "/bcdDevice", BCDDEVICE);
-  write_to_file (GADGETDIR "/bcdUSB", BCDUSB);
-
-  mkdir (GADGETDIR "/configs/" CONFIGNAME, 0755);
-  mkdir (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409", 0755);
   write_to_file (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409/configuration", "rndis");
 
   symlink (GADGETDIR "/functions/" RNDISCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" RNDISCONFIG);
+  symlink (GADGETDIR "/functions/" RNDISBAMCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" RNDISBAMCONFIG);
 
   char serialnumber[PROP_VALUE_MAX];
   char manufacturer[PROP_VALUE_MAX];
@@ -143,6 +150,8 @@ static void
 configure_none ()
 {
   g_print ("Configuring for mode NONE\n");
+
+  setup_configfs ();
 
   cleanup_configfs ();
 

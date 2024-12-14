@@ -8,10 +8,11 @@
 #include <stdbool.h>
 
 #define CONFIGFS "/sys/kernel/config"
-#define CONFIGDIR CONFIGFS "/usb_gadget"
-#define GADGETDIR CONFIGDIR "/g1"
+#define USBGADGET CONFIGFS "/usb_gadget"
+#define GADGETDIR USBGADGET "/g1"
 #define CONFIGNAME "c.1"
 #define RNDISCONFIG "rndis.usb0"
+#define RNDISBAMCONFIG "rndis_bam.rndis"
 #define MTPCONFIG "mtp.gs0"
 #define MASS_STORAGE "mass_storage.0"
 
@@ -23,6 +24,8 @@
 #define IDPRODUCT "0xFF20"
 #define BCDDEVICE "0x0223"
 #define BCDUSB "0x0200"
+
+#define MTP_USB "/dev/mtp_usb"
 
 void
 write_to_file (const char *path,
