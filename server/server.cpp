@@ -17,7 +17,7 @@
  * Authors: Bardia Mosiri <bardia@furilabs.com>
  */
 
-#include "DroidianMtpDatabase.h"
+#include "LinuxMtpDatabase.h"
 
 #include <MtpServer.h>
 #include <MtpStorage.h>
@@ -382,7 +382,7 @@ public:
         io_service_thread = boost::thread(boost::bind(&asio::io_service::run, &io_svc));
 
         // MTP database.
-        mtp_database = new DroidianMtpDatabase();
+        mtp_database = new LinuxMtpDatabase();
 
         // MTP server
         server = new MtpServer(
