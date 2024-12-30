@@ -1,5 +1,5 @@
 usr/bin/mtp-server
 rules/90-mtp.rules /etc/udev/rules.d/
 mtp-server.service /usr/lib/systemd/user/
-usr/sbin/mtp-configfs
-mtp-configfs/io.FuriOS.USBConfig.conf /etc/dbus-1/system.d/
+usr/sbin/usb-config
+usb-config/io.FuriOS.USBConfig.conf /etc/dbus-1/system.d/

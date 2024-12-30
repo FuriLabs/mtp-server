@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(mtp-configfs)
+project(usb-config)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GIO REQUIRED gio-2.0)
@@ -12,14 +12,14 @@ include_directories(
 
 set(SOURCES usb-config.c isodrive.c utils.c)
 
-add_executable(mtp-configfs ${SOURCES})
+add_executable(usb-config ${SOURCES})
 
-target_link_libraries(mtp-configfs
+target_link_libraries(usb-config
   ${GIO_LIBRARIES}
   ${LIBANDROID_PROPERTIES_LIBRARIES}
 )
 
 install(
-  TARGETS mtp-configfs
+  TARGETS usb-config
   RUNTIME DESTINATION sbin
 )

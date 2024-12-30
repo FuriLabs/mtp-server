@@ -8,8 +8,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=dbus
 BusName=io.FuriOS.USBConfig
-ExecStartPre=-/usr/bin/chown furios:furios /dev/mtp_usb
-ExecStart=/usr/sbin/mtp-configfs
+ExecStart=/usr/sbin/usb-config
 RestartSec=1
 TimeoutStartSec=5
 Restart=always
