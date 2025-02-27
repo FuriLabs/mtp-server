@@ -120,7 +120,7 @@ mount_iso_file (const char *path,
                 gboolean force_usbgadget)
 {
   if (cdrom && !readonly) {
-    g_print ("Incompatible arguments: Cannot mount CDROM in read-write mode\n");
+    g_debug ("Incompatible arguments: Cannot mount CDROM in read-write mode");
     return;
   }
 
@@ -148,12 +148,12 @@ mount_iso_file (const char *path,
   }
 
   if (is_configfs_supported ()) {
-    g_print ("Using configfs to mount\n");
+    g_debug ("Using configfs to mount");
     configure_mass_storage_configfs (path, cdrom, readonly);
   } else if (is_android_usb_supported ()) {
-    g_print ("Using android usb to mount\n");
+    g_debug ("Using android usb to mount");
     if (cdrom || !readonly)
-      g_print ("Note: CDROM and read-write flags are ignored in Android USB mode\n");
+      g_debug ("Note: CDROM and read-write flags are ignored in Android USB mode");
     configure_mass_storage_android (path);
   } else {
     g_print ("No supported USB mass storage configuration method found\n");
@@ -164,10 +164,10 @@ void
 unmount_iso_file (void)
 {
   if (is_configfs_supported ()) {
-    g_print ("Using configfs to unmount\n");
+    g_debug ("Using configfs to unmount");
     configure_mass_storage_configfs ("", false, true);
   } else if (is_android_usb_supported ()) {
-    g_print ("Using android usb to unmount\n");
+    g_debug ("Using android usb to unmount");
     configure_mass_storage_android ("");
   } else {
     g_print ("No supported USB mass storage configuration method found\n");

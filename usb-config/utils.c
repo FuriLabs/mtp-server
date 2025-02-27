@@ -12,7 +12,7 @@ void
 write_to_file (const char *path,
                const char *value)
 {
-  g_print ("Attempting to write to %s: %s\n", path, value);
+  g_debug ("Attempting to write to %s: %s", path, value);
 
   int fd = open (path, O_WRONLY);
   if (fd == -1) {

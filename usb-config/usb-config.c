@@ -76,7 +76,7 @@ cleanup_configfs ()
 static void
 configure_mtp ()
 {
-  g_print ("Configuring for mode MTP\n");
+  g_debug ("Configuring for mode MTP");
 
   setup_configfs ();
 
@@ -121,7 +121,7 @@ configure_mtp ()
 static void
 configure_rndis ()
 {
-  g_print ("Configuring for mode RNDIS\n");
+  g_debug ("Configuring for mode RNDIS");
 
   setup_configfs ();
 
@@ -151,7 +151,7 @@ configure_rndis ()
 static void
 configure_accessory ()
 {
-  g_print ("Configuring for mode Accessory\n");
+  g_debug ("Configuring for mode Accessory");
 
   setup_configfs ();
 
@@ -181,7 +181,7 @@ configure_accessory ()
 static void
 configure_acm ()
 {
-  g_print ("Configuring for mode ACM\n");
+  g_debug ("Configuring for mode ACM");
 
   setup_configfs ();
 
@@ -211,7 +211,7 @@ configure_acm ()
 static void
 configure_none ()
 {
-  g_print ("Configuring for mode NONE\n");
+  g_debug ("Configuring for mode NONE");
 
   setup_configfs ();
 
@@ -350,14 +350,14 @@ static void
 on_name_acquired (GDBusConnection *connection,
                   const gchar *name, gpointer user_data)
 {
-  g_print ("Name acquired: %s\n", name);
+  g_debug ("Name acquired: %s", name);
 }
 
 static void
 on_name_lost (GDBusConnection *connection,
               const gchar *name, gpointer user_data)
 {
-  g_printerr ("Name lost: %s\n", name);
+  g_debug ("Name lost: %s", name);
 }
 
 int
