@@ -69,6 +69,8 @@ cleanup_configfs ()
   unlink (GADGETDIR "/configs/" CONFIGNAME "/" MTPCONFIG);
   unlink (GADGETDIR "/configs/" CONFIGNAME "/" RNDISCONFIG);
   unlink (GADGETDIR "/configs/" CONFIGNAME "/" RNDISBAMCONFIG);
+  unlink (GADGETDIR "/configs/" CONFIGNAME "/" ACCESSORYCONFIG);
+  unlink (GADGETDIR "/configs/" CONFIGNAME "/" ACMCONFIG);
 }
 
 static void
@@ -147,6 +149,66 @@ configure_rndis ()
 }
 
 static void
+configure_accessory ()
+{
+  g_print ("Configuring for mode Accessory\n");
+
+  setup_configfs ();
+
+  cleanup_configfs ();
+
+  write_to_file (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409/configuration", "accessory");
+
+  mkdir (GADGETDIR "/functions/" ACCESSORYCONFIG, 0755);
+  symlink (GADGETDIR "/functions/" ACCESSORYCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" ACCESSORYCONFIG);
+
+  char serialnumber[PROP_VALUE_MAX];
+  char manufacturer[PROP_VALUE_MAX];
+  char product[PROP_VALUE_MAX];
+  char controller[PROP_VALUE_MAX];
+
+  property_get ("ro.serialno", serialnumber, "");
+  property_get ("ro.product.vendor.manufacturer", manufacturer, "");
+  property_get ("ro.product.vendor.model", product, "");
+  property_get ("sys.usb.controller", controller, "");
+
+  write_to_file (GADGETDIR "/strings/0x409/serialnumber", serialnumber);
+  write_to_file (GADGETDIR "/strings/0x409/manufacturer", manufacturer);
+  write_to_file (GADGETDIR "/strings/0x409/product", product);
+  write_to_file (GADGETDIR "/UDC", controller);
+}
+
+static void
+configure_acm ()
+{
+  g_print ("Configuring for mode ACM\n");
+
+  setup_configfs ();
+
+  cleanup_configfs ();
+
+  mkdir (GADGETDIR "/functions/" ACMCONFIG, 0755);
+  write_to_file (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409/configuration", "acm");
+
+  symlink (GADGETDIR "/functions/" ACMCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" ACMCONFIG);
+
+  char serialnumber[PROP_VALUE_MAX];
+  char manufacturer[PROP_VALUE_MAX];
+  char product[PROP_VALUE_MAX];
+  char controller[PROP_VALUE_MAX];
+
+  property_get ("ro.serialno", serialnumber, "");
+  property_get ("ro.product.vendor.manufacturer", manufacturer, "");
+  property_get ("ro.product.vendor.model", product, "");
+  property_get ("sys.usb.controller", controller, "");
+
+  write_to_file (GADGETDIR "/strings/0x409/serialnumber", serialnumber);
+  write_to_file (GADGETDIR "/strings/0x409/manufacturer", manufacturer);
+  write_to_file (GADGETDIR "/strings/0x409/product", product);
+  write_to_file (GADGETDIR "/UDC", controller);
+}
+
+static void
 configure_none ()
 {
   g_print ("Configuring for mode NONE\n");
@@ -177,6 +239,10 @@ handle_method_call (GDBusConnection *connection,
       configure_mtp ();
     else if (g_strcmp0 (mode, "rndis") == 0)
       configure_rndis ();
+    else if (g_strcmp0 (mode, "accessory") == 0)
+      configure_accessory ();
+    else if (g_strcmp0 (mode, "acm") == 0)
+      configure_acm ();
     else if (g_strcmp0 (mode, "none") == 0)
       configure_none ();
   } else if (g_strcmp0 (method_name, "MountFile") == 0) {

@@ -15,6 +15,8 @@
 #define RNDISBAMCONFIG "rndis_bam.rndis"
 #define MTPCONFIG "mtp.gs0"
 #define MASS_STORAGE "mass_storage.0"
+#define ACCESSORYCONFIG "accessory.usb0"
+#define ACMCONFIG "acm.0"
 
 #define ANDROID0_SYSFS_ENABLE "/sys/devices/virtual/android_usb/android0/enable"
 #define ANDROID0_SYSFS_IMG_FILE "/sys/devices/virtual/android_usb/android0/f_mass_storage/lun/file"
