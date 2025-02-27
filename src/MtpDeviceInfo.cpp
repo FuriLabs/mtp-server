@@ -65,7 +65,6 @@ MtpDeviceInfo::~MtpDeviceInfo() {
 
 bool MtpDeviceInfo::read(MtpDataPacket& packet) {
     MtpStringBuffer string;
-
     // read the device info
     if (!packet.getUInt16(mStandardVersion)) return false;
     if (!packet.getUInt32(mVendorExtensionID)) return false;
@@ -73,6 +72,7 @@ bool MtpDeviceInfo::read(MtpDataPacket& packet) {
 
     if (!packet.getString(string)) return false;
     mVendorExtensionDesc = strdup((const char *)string);
+    if (!mVendorExtensionDesc) return false;
 
     if (!packet.getUInt16(mFunctionalMode)) return false;
     mOperations = packet.getAUInt16();
@@ -88,12 +88,16 @@ bool MtpDeviceInfo::read(MtpDataPacket& packet) {
 
     if (!packet.getString(string)) return false;
     mManufacturer = strdup((const char *)string);
+    if (!mManufacturer) return false;
     if (!packet.getString(string)) return false;
     mModel = strdup((const char *)string);
+    if (!mModel) return false;
     if (!packet.getString(string)) return false;
     mVersion = strdup((const char *)string);
+    if (!mVersion) return false;
     if (!packet.getString(string)) return false;
     mSerial = strdup((const char *)string);
+    if (!mSerial) return false;
 
     return true;
 }

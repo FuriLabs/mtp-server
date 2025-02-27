@@ -72,6 +72,19 @@ struct usb_host_context *usb_host_init(void);
 /* Call this to cleanup the USB host library. */
 void usb_host_cleanup(struct usb_host_context *context);
 
+/* Call this to get the inotify file descriptor. */
+int usb_host_get_fd(struct usb_host_context *context);
+
+/* Call this to initialize the usb host context. */
+int usb_host_load(struct usb_host_context *context,
+                  usb_device_added_cb added_cb,
+                  usb_device_removed_cb removed_cb,
+                  usb_discovery_done_cb discovery_done_cb,
+                  void *client_data);
+
+/* Call this to read and handle occuring usb event. */
+int usb_host_read_event(struct usb_host_context *context);
+
 /* Call this to monitor the USB bus for new and removed devices.
  * This is intended to be called from a dedicated thread,
  * as it will not return until one of the callbacks returns true.
@@ -131,22 +144,26 @@ const struct usb_device_descriptor* usb_device_get_device_descriptor(struct usb_
  * usb_device_get_product_name and usb_device_get_serial.
  * Call free() to free the result when you are done with it.
  */
-char* usb_device_get_string(struct usb_device *device, int id);
+char* usb_device_get_string(struct usb_device *device, int id, int timeout);
 
 /* Returns the manufacturer name for the USB device.
  * Call free() to free the result when you are done with it.
  */
-char* usb_device_get_manufacturer_name(struct usb_device *device);
+char* usb_device_get_manufacturer_name(struct usb_device *device, int timeout);
 
 /* Returns the product name for the USB device.
  * Call free() to free the result when you are done with it.
  */
-char* usb_device_get_product_name(struct usb_device *device);
+char* usb_device_get_product_name(struct usb_device *device, int timeout);
+
+/* Returns the version number for the USB device.
+ */
+int usb_device_get_version(struct usb_device *device);
 
 /* Returns the USB serial number for the USB device.
  * Call free() to free the result when you are done with it.
  */
-char* usb_device_get_serial(struct usb_device *device);
+char* usb_device_get_serial(struct usb_device *device, int timeout);
 
 /* Returns true if we have write access to the USB device,
  * and false if we only have access to the USB device configuration.
@@ -176,6 +193,13 @@ int usb_device_release_interface(struct usb_device *device, unsigned int interfa
 int usb_device_connect_kernel_driver(struct usb_device *device,
         unsigned int interface, int connect);
 
+/* Sets the current configuration for the device to the specified configuration */
+int usb_device_set_configuration(struct usb_device *device, int configuration);
+
+/* Sets the specified interface of a USB device */
+int usb_device_set_interface(struct usb_device *device, unsigned int interface,
+                            unsigned int alt_setting);
+
 /* Sends a control message to the specified device on endpoint zero */
 int usb_device_control_transfer(struct usb_device *device,
                             int requestType,
@@ -192,8 +216,11 @@ int usb_device_control_transfer(struct usb_device *device,
 int usb_device_bulk_transfer(struct usb_device *device,
                             int endpoint,
                             void* buffer,
-                            int length,
+                            unsigned int length,
                             unsigned int timeout);
+
+/** Reset USB bus for the device */
+int usb_device_reset(struct usb_device *device);
 
 /* Creates a new usb_request. */
 struct usb_request *usb_request_new(struct usb_device *dev,
@@ -205,10 +232,11 @@ void usb_request_free(struct usb_request *req);
 /* Submits a read or write request on the specified device */
 int usb_request_queue(struct usb_request *req);
 
- /* Waits for the results of a previous usb_request_queue operation.
+ /* Waits for the results of a previous usb_request_queue operation. timeoutMillis == -1 requests
+  * to wait forever.
   * Returns a usb_request, or NULL for error.
   */
-struct usb_request *usb_request_wait(struct usb_device *dev);
+struct usb_request *usb_request_wait(struct usb_device *dev, int timeoutMillis);
 
 /* Cancels a pending usb_request_queue() operation. */
 int usb_request_cancel(struct usb_request *req);

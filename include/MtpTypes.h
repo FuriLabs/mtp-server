@@ -82,6 +82,13 @@ typedef UInt32List MtpStorageIDList;
 
 typedef std::string    MtpString;
 
+enum UrbPacketDivisionMode {
+    // First packet only contains a header.
+    FIRST_PACKET_ONLY_HEADER,
+    // First packet contains payload much as possible.
+    FIRST_PACKET_HAS_PAYLOAD
+};
+
 typedef std::mutex MtpMutex;
 typedef std::lock_guard<std::mutex> MtpAutolock;
 

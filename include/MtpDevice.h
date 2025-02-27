@@ -60,10 +60,17 @@ private:
     bool                    mProcessingEvent;
     int                     mCurrentEventHandle;
 
+    // to check if a sendObject request follows the last sendObjectInfo request.
+    MtpTransactionID        mLastSendObjectInfoTransactionID;
+    MtpObjectHandle         mLastSendObjectInfoObjectHandle;
+
     // to ensure only one MTP transaction at a time
     MtpMutex                   mMutex;
     MtpMutex                   mEventMutex;
     MtpMutex                   mEventMutexForInterrupt;
+
+    // Remember the device's packet division mode.
+    UrbPacketDivisionMode   mPacketDivisionMode;
 
 public:
     typedef bool (*ReadObjectCallback)
