@@ -365,7 +365,7 @@ private:
     }
 
 public:
-    MtpDaemon(int fd):
+    MtpDaemon():
         stream_desc(io_svc),
         work(io_svc),
         buf(1024) {
@@ -386,12 +386,13 @@ public:
 
         // MTP server
         server = new MtpServer(
-                fd,
                 mtp_database,
                 false,
                 userdata->pw_gid,
                 FileSystemConfig::file_perm,
                 FileSystemConfig::directory_perm);
+
+        server->configure(false);
 
         // Setup logind monitoring
         setup_logind_monitor();
@@ -478,8 +479,10 @@ int main(int argc, char** argv) {
         fd = open("/dev/mtp_usb", O_RDWR);
     }
 
+    close(fd);
+
     try {
-        MtpDaemon *d = new MtpDaemon(fd);
+        MtpDaemon *d = new MtpDaemon();
 
         d->initStorage();
         d->run();

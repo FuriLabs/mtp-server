@@ -21,15 +21,11 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <fcntl.h>
-#include <sys/ioctl.h>
 #include <cstring>
 
 #include <glog/logging.h>
 
-#ifdef MTP_DEVICE
-#include <linux/usb/f_mtp.h>
-#endif
-
+#include "IMtpHandle.h"
 #include "MtpEventPacket.h"
 
 #include <usbhost/usbhost.h>
@@ -45,7 +41,7 @@ MtpEventPacket::~MtpEventPacket() {
 }
 
 #ifdef MTP_DEVICE
-int MtpEventPacket::write(int fd) {
+int MtpEventPacket::write(IMtpHandle *h) {
     struct mtp_event    event;
 
     putUInt32(MTP_CONTAINER_LENGTH_OFFSET, mPacketSize);
@@ -53,7 +49,7 @@ int MtpEventPacket::write(int fd) {
 
     event.data = mBuffer;
     event.length = mPacketSize;
-    int ret = ::ioctl(fd, MTP_SEND_EVENT, (unsigned long)&event);
+    int ret = h->sendEvent(event);
     return (ret < 0 ? ret : 0);
 }
 #endif

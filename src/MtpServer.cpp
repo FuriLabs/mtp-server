@@ -19,15 +19,16 @@
 #include <cstdlib>
 #include <cstring>
 
-#include <sys/types.h>
-#include <sys/ioctl.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <sys/stat.h>
 #include <dirent.h>
-#include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <chrono>
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <unistd.h>
 
 #define LOG_TAG "MtpServer"
 
@@ -38,8 +39,6 @@
 #include "MtpServer.h"
 #include "MtpStorage.h"
 #include "MtpStringBuffer.h"
-
-#include <linux/usb/f_mtp.h>
 
 #include <hybris/properties/properties.h>
 
@@ -63,7 +62,7 @@ static const MtpOperationCode kSupportedOperationCodes[] = {
     MTP_OPERATION_SEND_OBJECT,
 //    MTP_OPERATION_INITIATE_CAPTURE,
 //    MTP_OPERATION_FORMAT_STORE,
-//    MTP_OPERATION_RESET_DEVICE,
+    MTP_OPERATION_RESET_DEVICE,
 //    MTP_OPERATION_SELF_TEST,
 //    MTP_OPERATION_SET_OBJECT_PROTECTION,
 //    MTP_OPERATION_POWER_DOWN,
@@ -106,10 +105,9 @@ static const MtpEventCode kSupportedEventCodes[] = {
     MTP_EVENT_OBJECT_PROP_CHANGED,
 };
 
-MtpServer::MtpServer(int fd, MtpDatabase* database, bool ptp,
+MtpServer::MtpServer(MtpDatabase* database, bool ptp,
                     int fileGroup, int filePerm, int directoryPerm)
-    :   mFD(fd),
-        mDatabase(database),
+    :   mDatabase(database),
         mPtp(ptp),
         mFileGroup(fileGroup),
         mFilePermission(filePerm),
@@ -123,6 +121,21 @@ MtpServer::MtpServer(int fd, MtpDatabase* database, bool ptp,
 }
 
 MtpServer::~MtpServer() {
+}
+
+IMtpHandle* MtpServer::sHandle = nullptr;
+
+int MtpServer::configure(bool usePtp) {
+    if (sHandle == nullptr) {
+        bool ffs_ok = access(FFS_MTP_EP0, W_OK) == 0;
+        const char* driver_type = ffs_ok ? "FunctionFS" : "MTP_USB";
+        VLOG(2) << "MtpServer using " << driver_type << " driver";
+        sHandle = ffs_ok ? get_ffs_handle() : get_mtp_handle();
+    }
+
+    int ret = sHandle->configure(usePtp);
+
+    return ret;
 }
 
 void MtpServer::addStorage(MtpStorage* storage) {
@@ -155,13 +168,20 @@ void MtpServer::stop() {
 }
 
 void MtpServer::run() {
-    int fd = mFD;
+    if (!sHandle) {
+        PLOG(ERROR) << "MtpServer was never configured!";
+        return;
+    }
 
-    VLOG(1) << "MtpServer::run fd: " << fd;
+    if (sHandle->start()) {
+        PLOG(ERROR) << "Failed to start usb driver!";
+        sHandle->close();
+        return;
+    }
 
     mRunning = true;
     while (mRunning) {
-        int ret = mRequest.read(fd);
+        int ret = mRequest.read(sHandle);
         if (ret < 0) {
             PLOG(ERROR) << "request read returned " << ret;
             if (errno == ECANCELED) {
@@ -174,7 +194,6 @@ void MtpServer::run() {
         MtpTransactionID transaction = mRequest.getTransactionID();
 
         VLOG(2) << "operation: " << MtpDebug::getOperationCodeName(operation);
-        mRequest.dump();
 
         // FIXME need to generalize this
         bool dataIn = (operation == MTP_OPERATION_SEND_OBJECT_INFO
@@ -182,7 +201,7 @@ void MtpServer::run() {
                     || operation == MTP_OPERATION_SET_OBJECT_PROP_VALUE
                     || operation == MTP_OPERATION_SET_DEVICE_PROP_VALUE);
         if (dataIn) {
-            int ret = mData.read(fd);
+            int ret = mData.read(sHandle);
             if (ret < 0) {
                 PLOG(ERROR) << "data read returned " << ret;
                 if (errno == ECANCELED) {
@@ -192,7 +211,6 @@ void MtpServer::run() {
                 break;
             }
             VLOG(2) << "received data:";
-            mData.dump();
         } else {
             mData.reset();
         }
@@ -202,8 +220,7 @@ void MtpServer::run() {
                 mData.setOperationCode(operation);
                 mData.setTransactionID(transaction);
                 VLOG(2) << "sending data:";
-                mData.dump();
-                ret = mData.write(fd);
+                ret = mData.write(sHandle);
                 if (ret < 0) {
                     PLOG(ERROR) << "request write returned " << ret;
                     if (errno == ECANCELED) {
@@ -217,9 +234,8 @@ void MtpServer::run() {
             mResponse.setTransactionID(transaction);
             VLOG(2) << "sending response "
                     << std::hex << mResponse.getResponseCode() << std::dec;
-            ret = mResponse.write(fd);
+            ret = mResponse.write(sHandle);
             const int savedErrno = errno;
-            mResponse.dump();
             if (ret < 0) {
                 PLOG(ERROR) << "request write returned " << ret
                             << ", errno: " << savedErrno;
@@ -245,8 +261,8 @@ void MtpServer::run() {
 
     if (mSessionOpen)
         mDatabase->sessionEnded();
-    close(fd);
-    mFD = -1;
+
+    sHandle->close();
 }
 
 void MtpServer::sendObjectAdded(MtpObjectHandle handle) {
@@ -266,19 +282,19 @@ void MtpServer::sendObjectUpdated(MtpObjectHandle handle) {
 
 MtpStorage* MtpServer::getStorageLocked(MtpStorageID id) {
     if (id == 0)
-        return mStorages.empty() ? NULL : mStorages[0];
+        return mStorages.empty() ? nullptr : mStorages[0];
     for (size_t i = 0; i < mStorages.size(); i++) {
         MtpStorage* storage = mStorages[i];
         if (storage->getStorageID() == id)
             return storage;
     }
-    return NULL;
+    return nullptr;
 }
 
 bool MtpServer::hasStorage(MtpStorageID id) {
     if (id == 0 || id == 0xFFFFFFFF)
         return mStorages.size() > 0;
-    return (getStorageLocked(id) != NULL);
+    return (getStorageLocked(id) != nullptr);
 }
 
 void MtpServer::sendStoreAdded(MtpStorageID id) {
@@ -306,8 +322,9 @@ void MtpServer::sendEvent(MtpEventCode code,
         mEvent.setParameter(1, param1);
         mEvent.setParameter(2, param2);
         mEvent.setParameter(3, param3);
-        int ret = mEvent.write(mFD);
-        VLOG(2) << "mEvent.write returned " << ret;
+        int ret = mEvent.write(sHandle);
+        if (mEvent.write(sHandle))
+            PLOG(ERROR) << "Mtp send event failed: " << ret;
     }
 }
 
@@ -323,7 +340,7 @@ MtpServer::ObjectEdit* MtpServer::getEditObject(MtpObjectHandle handle) {
         ObjectEdit* edit = mObjectEditList[i];
         if (edit->mHandle == handle) return edit;
     }
-    return NULL;
+    return nullptr;
 }
 
 void MtpServer::removeEditObject(MtpObjectHandle handle) {
@@ -373,6 +390,7 @@ bool MtpServer::handleRequest() {
         case MTP_OPERATION_OPEN_SESSION:
             response = doOpenSession();
             break;
+        case MTP_OPERATION_RESET_DEVICE:
         case MTP_OPERATION_CLOSE_SESSION:
             response = doCloseSession();
             break;
@@ -811,6 +829,8 @@ MtpResponseCode MtpServer::doGetObject() {
     if (result != MTP_RESPONSE_OK)
         return result;
 
+    auto start = std::chrono::steady_clock::now();
+
     mtp_file_range  mfr;
     mfr.fd = open(pathBuf.c_str(), O_RDONLY | O_LARGEFILE);
     if (mfr.fd < 0) {
@@ -822,8 +842,9 @@ MtpResponseCode MtpServer::doGetObject() {
     mfr.transaction_id = mRequest.getTransactionID();
 
     // then transfer the file
-    int ret = ioctl(mFD, MTP_SEND_FILE_WITH_HEADER, (unsigned long)&mfr);
+    int ret = sHandle->sendFile(mfr);
     if (ret < 0) {
+        PLOG(ERROR) << "Mtp send file got error " << errno;
         if (errno == ECANCELED) {
             result = MTP_RESPONSE_TRANSACTION_CANCELLED;
         } else {
@@ -848,7 +869,7 @@ MtpResponseCode MtpServer::doGetThumb() {
         // send data
         mData.setOperationCode(mRequest.getOperationCode());
         mData.setTransactionID(mRequest.getTransactionID());
-        mData.writeData(mFD, thumb, thumbSize);
+        mData.writeData(sHandle, thumb, thumbSize);
         free(thumb);
         return MTP_RESPONSE_OK;
     } else {
@@ -901,7 +922,7 @@ MtpResponseCode MtpServer::doGetPartialObject(MtpOperationCode operation) {
     mResponse.setParameter(1, length);
 
     // transfer the file
-    int ret = ioctl(mFD, MTP_SEND_FILE_WITH_HEADER, (unsigned long)&mfr);
+    int ret = sHandle->sendFile(mfr);
     VLOG(2) << "MTP_SEND_FILE_WITH_HEADER returned " << ret;
     result = MTP_RESPONSE_OK;
     if (ret < 0) {
@@ -1031,6 +1052,8 @@ MtpResponseCode MtpServer::doSendObject() {
     int ret, initialData;
     bool isCanceled = false;
 
+    auto start = std::chrono::steady_clock::now();
+
     if (mSendObjectHandle == kInvalidObjectHandle) {
         LOG(ERROR) << "Expected SendObjectInfo before SendObject";
         result = MTP_RESPONSE_NO_VALID_OBJECT_INFO;
@@ -1038,7 +1061,7 @@ MtpResponseCode MtpServer::doSendObject() {
     }
 
     // read the header, and possibly some data
-    ret = mData.read(mFD);
+    ret = mData.read(sHandle);
     if (ret < MTP_CONTAINER_HEADER_SIZE) {
         result = MTP_RESPONSE_GENERAL_ERROR;
         goto done;
@@ -1067,28 +1090,30 @@ MtpResponseCode MtpServer::doSendObject() {
         LOG(ERROR) << "failed to write initial data";
         result = MTP_RESPONSE_GENERAL_ERROR;
     } else {
-        if (mSendObjectFileSize - initialData > 0) {
-            mfr.offset = initialData;
-            if (mSendObjectFileSize == 0xFFFFFFFF) {
-                // tell driver to read until it receives a short packet
-                mfr.length = 0xFFFFFFFF;
-            } else {
-                mfr.length = mSendObjectFileSize - initialData;
-            }
+        mfr.offset = initialData;
+        if (mSendObjectFileSize == 0xFFFFFFFF) {
+            // tell driver to read until it receives a short packet
+            mfr.length = 0xFFFFFFFF;
+        } else {
+            mfr.length = mSendObjectFileSize - initialData;
+        }
 
-            VLOG(2) << "receiving " << mSendObjectFilePath.c_str();
-            // transfer the file
-            ret = ioctl(mFD, MTP_RECEIVE_FILE, (unsigned long)&mfr);
-            if ((ret < 0) && (errno == ECANCELED)) {
-                isCanceled = true;
-            }
+        mfr.command = 0;
+        mfr.transaction_id = 0;
 
-            VLOG(2) << "MTP_RECEIVE_FILE returned " << ret;
+        // transfer the file
+        ret = sHandle->receiveFile(mfr, mfr.length == 0 &&
+                initialData == MTP_BUFFER_SIZE - MTP_CONTAINER_HEADER_SIZE);
+        if ((ret < 0) && (errno == ECANCELED)) {
+            isCanceled = true;
         }
     }
+    struct stat sstat;
+    fstat(mfr.fd, &sstat);
     close(mfr.fd);
 
     if (ret < 0) {
+        LOG(ERROR) << "Mtp receive file got error " << errno;
         unlink(mSendObjectFilePath.c_str());
         if (isCanceled)
             result = MTP_RESPONSE_TRANSACTION_CANCELLED;
@@ -1104,6 +1129,13 @@ done:
             result == MTP_RESPONSE_OK);
     mSendObjectHandle = kInvalidObjectHandle;
     mSendObjectFormat = 0;
+
+    auto end = std::chrono::steady_clock::now();
+    std::chrono::duration<double> diff = end - start;
+    uint64_t finalsize = sstat.st_size;
+    VLOG(2) << "Got a file over MTP. Time: " << diff.count() << "s, Size: " 
+        << finalsize << ", Rate: " << (static_cast<double>(finalsize) / diff.count()) 
+        << " bytes/s";
     return result;
 }
 
@@ -1272,7 +1304,7 @@ MtpResponseCode MtpServer::doSendPartialObject() {
             << " " << offset << " " << length;
 
     // read the header, and possibly some data
-    int ret = mData.read(mFD);
+    int ret = mData.read(sHandle);
     if (ret < MTP_CONTAINER_HEADER_SIZE)
         return MTP_RESPONSE_GENERAL_ERROR;
     int initialData = ret - MTP_CONTAINER_HEADER_SIZE;
@@ -1287,18 +1319,18 @@ MtpResponseCode MtpServer::doSendPartialObject() {
     if (ret < 0) {
         PLOG(ERROR) << "failed to write initial data";
     } else {
-        if (length > 0) {
-            mtp_file_range  mfr;
-            mfr.fd = edit->mFD;
-            mfr.offset = offset;
-            mfr.length = length;
+        mtp_file_range  mfr;
+        mfr.fd = edit->mFD;
+        mfr.offset = offset;
+        mfr.length = length;
+        mfr.command = 0;
+        mfr.transaction_id = 0;
 
-            // transfer the file
-            ret = ioctl(mFD, MTP_RECEIVE_FILE, (unsigned long)&mfr);
-            if ((ret < 0) && (errno == ECANCELED)) {
-                isCanceled = true;
-            }
-            VLOG(2) << "MTP_RECEIVE_FILE returned " << ret << " errno " << errno;
+        // transfer the file
+        ret = sHandle->receiveFile(mfr, mfr.length == 0 &&
+                initialData == MTP_BUFFER_SIZE - MTP_CONTAINER_HEADER_SIZE);
+        if ((ret < 0) && (errno == ECANCELED)) {
+            isCanceled = true;
         }
     }
     if (ret < 0) {

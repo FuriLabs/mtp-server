@@ -18,12 +18,15 @@ pkg_check_modules(GLOG REQUIRED libglog)
 
 set(
     MTP_HEADERS
+    include/AsyncIO.h
+    include/IMtpHandle.h
     include/MtpDatabase.h
     include/MtpDataPacket.h
     include/MtpDebug.h
     include/MtpDevice.h
     include/MtpDeviceInfo.h
     include/MtpEventPacket.h
+    include/MtpFfsHandle.h
     include/mtp.h
     include/MtpObjectInfo.h
     include/MtpPacket.h
@@ -36,15 +39,19 @@ set(
     include/MtpStringBuffer.h
     include/MtpTypes.h
     include/MtpUtils.h
+    include/unique_fd.h
 )
 
 set(
     MTP_SRCS
+    src/AsyncIO.cpp
     src/MtpDataPacket.cpp
     src/MtpDebug.cpp
+    src/MtpDevHandle.cpp
     src/MtpDevice.cpp
     src/MtpDeviceInfo.cpp
     src/MtpEventPacket.cpp
+    src/MtpFfsHandle.cpp
     src/MtpObjectInfo.cpp
     src/MtpPacket.cpp
     src/MtpProperty.cpp

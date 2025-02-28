@@ -18,6 +18,8 @@
 #ifndef __LINUX_USB_F_MTP_H
 #define __LINUX_USB_F_MTP_H
 
+#include <cstdint>
+
 #ifdef __KERNEL__
 
 struct mtp_data_header {
