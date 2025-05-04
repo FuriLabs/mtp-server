@@ -59,25 +59,55 @@ configure_mass_storage_configfs (const char *iso_path,
   // this is \n to flush LUN and UDC. writing an empty string is not enough
   write_to_file (GADGETDIR "/UDC", "\n");
 
-  char lun_file[256];
-  snprintf (lun_file, sizeof (lun_file), "%s/functions/%s/lun.0/file",
-            GADGETDIR, MASS_STORAGE);
-  write_to_file (lun_file, "\n");
+  char functions_dir[256], mass_storage_dir[256], lun_dir[256];
+  char configs_dir[256], config_dir[256], config_link[256];
 
-  char lun_cdrom[256], lun_ro[256];
-  snprintf (lun_cdrom, sizeof (lun_cdrom), "%s/functions/%s/lun.0/cdrom",
-            GADGETDIR, MASS_STORAGE);
-  snprintf (lun_ro, sizeof (lun_ro), "%s/functions/%s/lun.0/ro",
-            GADGETDIR, MASS_STORAGE);
+  snprintf (functions_dir, sizeof (functions_dir),
+            "%s/functions", GADGETDIR);
+  snprintf (mass_storage_dir, sizeof (mass_storage_dir),
+            "%s/functions/%s", GADGETDIR, MASS_STORAGE),
+  snprintf (lun_dir, sizeof (lun_dir),
+            "%s/functions/%s/lun.0", GADGETDIR, MASS_STORAGE);
+  snprintf (configs_dir, sizeof (configs_dir),
+            "%s/configs", GADGETDIR);
+  snprintf (config_dir, sizeof (config_dir),
+            "%s/configs/c.1", GADGETDIR);
+  snprintf (config_link, sizeof (config_link),
+            "%s/configs/c.1/%s", GADGETDIR, MASS_STORAGE);
 
-  write_to_file (lun_cdrom, "0");
-  write_to_file (lun_ro, "0");
+  char lun_file[256], lun_cdrom[256], lun_ro[256];
+  snprintf (lun_file, sizeof (lun_file),
+            "%s/functions/%s/lun.0/file", GADGETDIR, MASS_STORAGE);
+  snprintf (lun_cdrom, sizeof (lun_cdrom),
+            "%s/functions/%s/lun.0/cdrom", GADGETDIR, MASS_STORAGE);
+  snprintf (lun_ro, sizeof (lun_ro),
+            "%s/functions/%s/lun.0/ro", GADGETDIR, MASS_STORAGE);
 
-  // Now set the actual values
+  // Empty the lun file if it exists
+  struct stat st;
+  if (stat (lun_file, &st) == 0)
+    write_to_file (lun_file, "\n");
+
   if (strlen (iso_path) > 0) {
-    write_to_file (lun_file, iso_path);
+    mkdir (functions_dir, 0755);
+    mkdir (mass_storage_dir, 0755);
+    mkdir (lun_dir, 0755);
+    mkdir (configs_dir, 0755);
+    mkdir (config_dir, 0755);
+
+    if (lstat (config_link, &st) != 0)
+      symlink (mass_storage_dir, config_link);
+
     write_to_file (lun_cdrom, cdrom ? "1" : "0");
     write_to_file (lun_ro, readonly ? "1" : "0");
+    write_to_file (lun_file, iso_path);
+  } else {
+    if (lstat (config_link, &st) == 0)
+      unlink (config_link);
+    if (stat (lun_dir, &st) == 0)
+      rmdir (lun_dir);
+    if (stat (mass_storage_dir, &st) == 0)
+      rmdir (mass_storage_dir);
   }
 
   // Re-enable UDC
