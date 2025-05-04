@@ -21,5 +21,5 @@ target_link_libraries(
 
 install(
   TARGETS mtp-server
-  RUNTIME DESTINATION bin
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
