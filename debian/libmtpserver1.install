@@ -1,1 +1,1 @@
-usr/lib/libmtpserver.so.*
+usr/lib/*/libmtpserver.so.*
