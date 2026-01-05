@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2013 Canonical Ltd.
+ * Copyright (C) 2025 Furi Labs.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 3, as
@@ -35,6 +36,10 @@
 #include <tuple>
 #include <exception>
 #include <sys/inotify.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <unordered_set>
+#include <cstdint>
 
 #include <boost/thread.hpp>
 #include <boost/asio.hpp>
@@ -94,6 +99,27 @@ private:
     asio::streambuf buf;
     int inotify_fd;
 
+    struct DevIno {
+        std::uint64_t dev;
+        std::uint64_t ino;
+        bool operator==(const DevIno& o) const noexcept { return dev == o.dev && ino == o.ino; }
+    };
+
+    struct DevInoHash {
+        std::size_t operator()(const DevIno& d) const noexcept {
+            return std::hash<std::uint64_t>()(d.dev) ^ (std::hash<std::uint64_t>()(d.ino) << 1);
+        }
+    };
+
+    static bool stat_dev_ino(const std::string& p, DevIno& out) {
+        struct stat st;
+        if (::lstat(p.c_str(), &st) != 0)
+            return false;
+        out.dev = static_cast<std::uint64_t>(st.st_dev);
+        out.ino = static_cast<std::uint64_t>(st.st_ino);
+        return true;
+    }
+
     MtpObjectFormat guess_object_format(std::string extension)
     {
         std::map<std::string, MtpObjectFormat>::iterator it;
@@ -105,99 +131,270 @@ private:
             if (it == formats.end()) {
                 return MTP_FORMAT_UNDEFINED;
             }
-	}
+        }
 
-	return it->second;
+        return it->second;
     }
 
     int setup_dir_inotify(path p)
     {
-        return inotify_add_watch(inotify_fd,
-                                 p.string().c_str(),
-                                 IN_MODIFY | IN_CREATE | IN_DELETE);
+        int wd = inotify_add_watch(inotify_fd,
+                                   p.string().c_str(),
+                                   IN_MODIFY | IN_CREATE | IN_DELETE);
+        // not fatal, indexing must continue even if we can't watch.
+        if (wd < 0)
+            PLOG(INFO) << "inotify_add_watch failed for " << p.string();
+        return wd;
     }
 
-
-    void add_file_entry(path p, MtpObjectHandle parent, MtpStorageID storage)
+    static bool is_directory_nofollow(const path& p, boost::system::error_code& ec_out)
     {
-        MtpObjectHandle handle = counter;
-        DbEntry entry;
+        ec_out.clear();
+        file_status st = symlink_status(p, ec_out);
+        if (ec_out)
+            return false;
+        // do not follow symlink dirs
+        if (is_symlink(st))
+            return false;
+        return is_directory(st);
+    }
 
-        counter++;
+    static bool is_regular_file_nofollow(const path& p, boost::system::error_code& ec_out)
+    {
+        ec_out.clear();
+        file_status st = symlink_status(p, ec_out);
+        if (ec_out)
+            return false;
+        // skip symlinks entirely
+        if (is_symlink(st))
+            return false;
+        return is_regular_file(st);
+    }
 
-        if (is_directory(p)) {
+    MtpObjectHandle add_file_entry(path p, MtpObjectHandle parent, MtpStorageID storage)
+    {
+        // never let exceptions kill indexing
+        try {
+            boost::system::error_code ec;
+
+            // prevents loops
+            file_status st = symlink_status(p, ec);
+            if (ec) {
+                VLOG(2) << "Skipping (stat failed): " << p.string() << " : " << ec.message();
+                return 0;
+            }
+            if (is_symlink(st)) {
+                VLOG(2) << "Skipping symlink: " << p.string();
+                return 0;
+            }
+
+            if (!is_directory(st) && !is_regular_file(st)) {
+                // skip special files (fifo, socket, device nodes, etc.)
+                VLOG(2) << "Skipping non-regular: " << p.string();
+                return 0;
+            }
+
+            MtpObjectHandle handle = counter;
+            DbEntry entry;
+            counter++;
+
             entry.storage_id = storage;
             entry.parent = parent;
             entry.display_name = std::string(p.filename().string());
             entry.path = p.string();
-            entry.object_format = MTP_FORMAT_ASSOCIATION;
-            entry.object_size = 0;
-            entry.watch_fd = setup_dir_inotify(p);
-            entry.last_modified = last_write_time(p);
 
-            db.insert( std::pair<MtpObjectHandle, DbEntry>(handle, entry) );
+            if (is_directory(st)) {
+                entry.object_format = MTP_FORMAT_ASSOCIATION;
+                entry.object_size = 0;
+                entry.watch_fd = setup_dir_inotify(p);
 
-            if (local_server)
-                local_server->sendObjectAdded(handle);
+                // last_write_time can throw
+                std::time_t lwt = 0;
+                ec.clear();
+                lwt = last_write_time(p, ec);
+                entry.last_modified = ec ? 0 : lwt;
 
-            parse_directory (p, handle, storage);
-        } else {
-            try {
-                entry.storage_id = storage;
-                entry.parent = parent;
-                entry.display_name = std::string(p.filename().string());
-                entry.path = p.string();
-                entry.object_format = guess_object_format(p.extension().string());
-                entry.object_size = file_size(p);
-                entry.last_modified = last_write_time(p);
-
-                VLOG(1) << "Adding \"" << p.string() << "\"";
-
-                db.insert( std::pair<MtpObjectHandle, DbEntry>(handle, entry) );
+                db.insert(std::pair<MtpObjectHandle, DbEntry>(handle, entry));
 
                 if (local_server)
                     local_server->sendObjectAdded(handle);
 
-            } catch (const filesystem_error& ex) {
-                PLOG(WARNING) << "There was an error reading file properties";
+                return handle;
+            } else {
+                entry.object_format = guess_object_format(p.extension().string());
+
+                // file_size / last_write_time can error
+                ec.clear();
+                uintmax_t sz = file_size(p, ec);
+                entry.object_size = ec ? 0 : static_cast<uint64_t>(sz);
+
+                ec.clear();
+                std::time_t lwt = last_write_time(p, ec);
+                entry.last_modified = ec ? 0 : lwt;
+
+                entry.watch_fd = -1;
+
+                VLOG(1) << "Adding \"" << p.string() << "\"";
+                db.insert(std::pair<MtpObjectHandle, DbEntry>(handle, entry));
+
+                if (local_server)
+                    local_server->sendObjectAdded(handle);
+
+                return handle;
             }
+        } catch (const std::exception& e) {
+            LOG(WARNING) << "add_file_entry suppressed exception for " << p.string() << " : " << e.what();
+            return 0;
+        } catch (...) {
+            LOG(WARNING) << "add_file_entry suppressed unknown exception for " << p.string();
+            return 0;
         }
     }
 
     void parse_directory(path p, MtpObjectHandle parent, MtpStorageID storage)
     {
-	DbEntry entry;
-        std::vector<path> v;
-        boost::system::error_code ec;
-        directory_iterator i (p, ec);
+        try {
+            // limits so a pathological tree can’t wedge forever
+            const int max_depth = 64;
+            const std::uint64_t max_items = 2000000ULL;
 
-        if (ec == boost::system::errc::permission_denied) {
-            VLOG(2) << "Could not immediately read dir; retrying.";
-            boost::this_thread::sleep(boost::posix_time::millisec(500));
-            i = directory_iterator(p);
-        }
+            std::uint64_t items_seen = 0;
 
-        copy(i, directory_iterator(), std::back_inserter(v));
+            struct StackItem {
+                path dir;
+                MtpObjectHandle handle;
+                int depth;
+            };
 
-        for (std::vector<path>::const_iterator it(v.begin()), it_end(v.end()); it != it_end; ++it)
-        {
-            add_file_entry(*it, parent, storage);
+            std::unordered_set<DevIno, DevInoHash> visited;
+            std::vector<StackItem> stack;
+
+            {
+                boost::system::error_code ec;
+                if (!is_directory_nofollow(p, ec)) {
+                    if (ec)
+                        VLOG(2) << "parse_directory: not accessible: " << p.string() << " : " << ec.message();
+                    return;
+                }
+
+                DevIno di;
+                if (stat_dev_ino(p.string(), di))
+                    visited.insert(di);
+                stack.push_back(StackItem{p, parent, 0});
+            }
+
+            while (!stack.empty()) {
+                if (items_seen >= max_items) {
+                    LOG(WARNING) << "Index: max_items reached under " << p.string() << ", stopping traversal";
+                    return;
+                }
+
+                StackItem cur = stack.back();
+                stack.pop_back();
+
+                if (cur.depth > max_depth) {
+                    VLOG(1) << "Index: max_depth reached at " << cur.dir.string() << ", skipping";
+                    continue;
+                }
+
+                boost::system::error_code ec;
+                directory_iterator it(cur.dir, ec);
+                if (ec) {
+                    VLOG(2) << "Index: cannot open dir " << cur.dir.string() << " : " << ec.message();
+                    continue;
+                }
+
+                directory_iterator end;
+                for (; it != end; ) {
+                    path entry_path;
+
+                    try {
+                        entry_path = it->path();
+                    } catch (...) {
+                        ec.clear();
+                        it.increment(ec);
+                        if (ec)
+                            break;
+                        continue;
+                    }
+
+                    ec.clear();
+                    it.increment(ec);
+
+                    boost::system::error_code ec2;
+                    file_status st = symlink_status(entry_path, ec2);
+                    if (ec2) {
+                        VLOG(2) << "Index: cannot stat " << entry_path.string() << " : " << ec2.message();
+                        if (ec)
+                            break;
+                        continue;
+                    }
+                    if (is_symlink(st)) {
+                        VLOG(2) << "Index: skipping symlink " << entry_path.string();
+                        if (ec)
+                            break;
+                        continue;
+                    }
+
+                    if (is_directory(st)) {
+                        MtpObjectHandle dir_handle = add_file_entry(entry_path, cur.handle, storage);
+                        if (dir_handle != 0) {
+                            DevIno di;
+                            if (stat_dev_ino(entry_path.string(), di)) {
+                                if (visited.find(di) == visited.end()) {
+                                    visited.insert(di);
+                                    stack.push_back(StackItem{entry_path, dir_handle, cur.depth + 1});
+                                } else {
+                                    VLOG(2) << "Index: skipping already visited dir " << entry_path.string();
+                                }
+                            } else {
+                                stack.push_back(StackItem{entry_path, dir_handle, cur.depth + 1});
+                            }
+                        }
+                    } else {
+                        add_file_entry(entry_path, cur.handle, storage);
+                    }
+
+                    items_seen++;
+
+                    if (ec) {
+                        VLOG(2) << "Index: iterator error in " << cur.dir.string() << " : " << ec.message();
+                        break;
+                    }
+                }
+            }
+        } catch (const std::exception& e) {
+            LOG(WARNING) << "parse_directory suppressed exception for " << p.string() << " : " << e.what();
+        } catch (...) {
+            LOG(WARNING) << "parse_directory suppressed unknown exception for " << p.string();
         }
     }
 
     void readFiles(const std::string& sourcedir, const std::string& display, MtpStorageID storage, bool hidden)
     {
-        path p (sourcedir);
-	DbEntry entry;
-	MtpObjectHandle handle = counter++;
+        path p(sourcedir);
+        DbEntry entry;
+        MtpObjectHandle handle = counter++;
         std::string display_name = std::string(p.filename().string());
 
         if (!display.empty())
             display_name = display;
 
         try {
-            if (exists(p)) {
-                if (is_directory(p)) {
+            boost::system::error_code ec;
+
+            if (exists(p, ec) && !ec) {
+                file_status st = symlink_status(p, ec);
+                if (ec) {
+                    LOG(WARNING) << "Cannot stat " << p.string() << " : " << ec.message();
+                    return;
+                }
+                if (is_symlink(st)) {
+                    LOG(INFO) << "Skipping symlink root " << p.string();
+                    return;
+                }
+
+                if (is_directory(st)) {
                     entry.storage_id = storage;
                     entry.parent = hidden ? MTP_PARENT_ROOT : 0;
                     entry.display_name = display_name;
@@ -205,17 +402,20 @@ private:
                     entry.object_format = MTP_FORMAT_ASSOCIATION;
                     entry.object_size = 0;
                     entry.watch_fd = setup_dir_inotify(p);
-                    entry.last_modified = last_write_time(p);
 
-                    db.insert( std::pair<MtpObjectHandle, DbEntry>(handle, entry) );
+                    ec.clear();
+                    std::time_t lwt = last_write_time(p, ec);
+                    entry.last_modified = ec ? 0 : lwt;
 
-                    parse_directory (p, hidden ? 0 : handle, storage);
-                } else
+                    db.insert(std::pair<MtpObjectHandle, DbEntry>(handle, entry));
+                    parse_directory(p, hidden ? 0 : handle, storage);
+                } else {
                     LOG(WARNING) << p << " is not a directory.";
+                }
             } else {
-                if (storage == MTP_STORAGE_FIXED_RAM)
+                if (storage == MTP_STORAGE_FIXED_RAM) {
                     LOG(WARNING) << p << " does not exist.";
-                else {
+                } else {
                     entry.storage_id = storage;
                     entry.parent = -1;
                     entry.display_name = display_name;
@@ -226,11 +426,13 @@ private:
                     entry.last_modified = 0;
                 }
             }
-        }
-        catch (const filesystem_error& ex) {
+        } catch (const filesystem_error& ex) {
             LOG(ERROR) << ex.what();
+        } catch (const std::exception& e) {
+            LOG(ERROR) << e.what();
+        } catch (...) {
+            LOG(ERROR) << "readFiles: unexpected error";
         }
-
     }
 
     void read_more_notify()
@@ -243,15 +445,15 @@ private:
     }
 
     void inotify_handler(const boost::system::error_code&,
-                        std::size_t transferred)
+                         std::size_t transferred)
     {
         size_t processed = 0;
 
-        while(transferred - processed >= sizeof(inotify_event))
+        while (transferred - processed >= sizeof(inotify_event))
         {
             const char* cdata = processed + asio::buffer_cast<const char*>(buf.data());
             const inotify_event* ievent = reinterpret_cast<const inotify_event*>(cdata);
-            MtpObjectHandle parent;
+            MtpObjectHandle parent = 0;
             path p;
 
             processed += sizeof(inotify_event) + ievent->len;
@@ -270,37 +472,36 @@ private:
                 continue;
             }
 
-            if(ievent->len > 0 && ievent->mask & IN_MODIFY)
+            if (ievent->len > 0 && (ievent->mask & IN_MODIFY))
             {
                 VLOG(2) << __PRETTY_FUNCTION__ << ": file modified: " << p.string();
                 BOOST_FOREACH(MtpObjectHandle i, db | boost::adaptors::map_keys) {
                     if (db.at(i).path == p.string()) {
-                        try {
-                            VLOG(2) << "new size: " << file_size(p);
-                            db.at(i).object_size = file_size(p);
-                        } catch (const filesystem_error& ex) {
-                            PLOG(WARNING) << "There was an error reading file properties";
+                        boost::system::error_code ec;
+                        uintmax_t sz = file_size(p, ec);
+                        if (!ec) {
+                            VLOG(2) << "new size: " << sz;
+                            db.at(i).object_size = static_cast<uint64_t>(sz);
+                        } else {
+                            PLOG(INFO) << "Could not read file size for " << p.string();
                         }
                     }
                 }
             }
-            else if(ievent->len > 0 && ievent->mask & IN_CREATE)
+            else if (ievent->len > 0 && (ievent->mask & IN_CREATE))
             {
                 int parent_handle = parent;
-                bool exists = false;
+                bool exists_in_db = false;
 
                 VLOG(2) << __PRETTY_FUNCTION__ << ": file created: " << p.string();
                 BOOST_FOREACH(MtpObjectHandle i, db | boost::adaptors::map_keys) {
                     if (db.at(i).path == p.string()) {
-			/* ignore files we already have (ie. from a beginSendObject)
-                         * See bug #1351042
-                         */
-                        exists = true;
+                        exists_in_db = true;
                         break;
                     }
                 }
 
-                if (!exists) {
+                if (!exists_in_db) {
                     /* Deal with the special case where the SD card might initially
                      * require an inotify watch, because it's not yet mounted.
                      * In this case, the SD card inotify watch is entered as a
@@ -312,10 +513,16 @@ private:
                         parent_handle = 0;
 
                     /* try to deal with it as if it was a file. */
-                    add_file_entry(p, parent_handle, db.at(parent).storage_id);
+                    MtpObjectHandle h = add_file_entry(p, parent_handle, db.at(parent).storage_id);
+                    if (h != 0) {
+                        boost::system::error_code ec3;
+                        file_status st3 = symlink_status(p, ec3);
+                        if (!ec3 && is_directory(st3))
+                            parse_directory(p, h, db.at(parent).storage_id);
+                    }
                 }
             }
-            else if(ievent->len > 0 && ievent->mask & IN_DELETE)
+            else if (ievent->len > 0 && (ievent->mask & IN_DELETE))
             {
                 VLOG(2) << __PRETTY_FUNCTION__ << ": file deleted: " << p.string();
                 BOOST_FOREACH(MtpObjectHandle i, db | boost::adaptors::map_keys) {
@@ -349,11 +556,9 @@ public:
 
         stream_desc.assign(inotify_fd);
 
-	db = std::map<MtpObjectHandle, DbEntry>();
+        db = std::map<MtpObjectHandle, DbEntry>();
 
-        notifier_thread = boost::thread(&LinuxMtpDatabase::read_more_notify,
-                                       this);
-
+        notifier_thread = boost::thread(&LinuxMtpDatabase::read_more_notify, this);
         io_service_thread = boost::thread(boost::bind(&asio::io_service::run, &io_svc));
     }
 
@@ -369,15 +574,17 @@ public:
                                 MtpStorageID storage,
                                 bool hidden)
     {
-	readFiles(path, displayName, storage, hidden);
+        readFiles(path, displayName, storage, hidden);
     }
 
     virtual void removeStorage(MtpStorageID storage)
     {
         // remove all database entries corresponding to said storage.
-        BOOST_FOREACH(MtpObjectHandle i, db | boost::adaptors::map_keys) {
-            if (db.at(i).storage_id == storage)
-                db.erase(i);
+        for (std::map<MtpObjectHandle, DbEntry>::iterator it = db.begin(); it != db.end(); ) {
+            if (it->second.storage_id == storage)
+                it = db.erase(it);
+            else
+                ++it;
         }
     }
 
@@ -390,8 +597,8 @@ public:
         uint64_t size,
         time_t modified)
     {
-	DbEntry entry;
-	MtpObjectHandle handle = counter;
+        DbEntry entry;
+        MtpObjectHandle handle = counter;
 
         if (storage == MTP_STORAGE_FIXED_RAM && parent == 0)
             return kInvalidObjectHandle;
@@ -407,9 +614,9 @@ public:
         entry.object_size = size;
         entry.last_modified = modified;
 
-        db.insert( std::pair<MtpObjectHandle, DbEntry>(handle, entry) );
+        db.insert(std::pair<MtpObjectHandle, DbEntry>(handle, entry));
 
-	counter++;
+        counter++;
 
         return handle;
     }
@@ -427,14 +634,17 @@ public:
 
         try
         {
-	    if (!succeeded) {
+            if (!succeeded) {
                 db.erase(handle);
             } else {
-                boost::filesystem::path p (path);
+                boost::filesystem::path p(path);
 
                 if (format != MTP_FORMAT_ASSOCIATION) {
                     /* Resync file size, just in case this is actually an Edit. */
-                    db.at(handle).object_size = file_size(p);
+                    boost::system::error_code ec;
+                    uintmax_t sz = file_size(p, ec);
+                    if (!ec)
+                        db.at(handle).object_size = static_cast<uint64_t>(sz);
                 }
             }
         } catch(...)
@@ -551,11 +761,6 @@ public:
     virtual MtpObjectPropertyList* getSupportedObjectProperties(MtpObjectFormat format)
     {
         VLOG(1) << __PRETTY_FUNCTION__;
-	/*
-        if (format != MTP_FORMAT_PNG)
-            return nullptr;
-        */
-
         static const MtpObjectPropertyList list =
         {
             MTP_PROPERTY_STORAGE_ID,
@@ -572,7 +777,6 @@ public:
             MTP_PROPERTY_DATE_MODIFIED,
             MTP_PROPERTY_HIDDEN,
             MTP_PROPERTY_NON_CONSUMABLE,
-
         };
 
         return new MtpObjectPropertyList{list};
@@ -658,7 +862,6 @@ public:
     {
         DbEntry entry;
         MtpStringBuffer buffer;
-        std::string oldname;
         std::string newname;
         path oldpath;
         path newpath;
@@ -698,7 +901,7 @@ public:
                 } catch (...) {
                     LOG(ERROR) << "An unexpected error has occurred";
                     return MTP_RESPONSE_GENERAL_ERROR;
-		}
+                }
 
                 break;
             case MTP_PROPERTY_PARENT_OBJECT:
@@ -934,7 +1137,6 @@ public:
                     packet.putUInt16(1); // files can usually be played.
                 break;
             }
-
         }
 
         return MTP_RESPONSE_OK;
@@ -984,14 +1186,10 @@ public:
         }
     }
 
-    virtual void* getThumbnail(MtpObjectHandle handle, size_t& outThumbSize)
+    virtual void* getThumbnail(MtpObjectHandle /*handle*/, size_t& outThumbSize)
     {
-        void* result;
-
-	outThumbSize = 0;
-	memset(result, 0, outThumbSize);
-
-        return result;
+        outThumbSize = 0;
+        return nullptr;
     }
 
     virtual MtpResponseCode getObjectFilePath(
@@ -1036,7 +1234,7 @@ public:
             return MTP_RESPONSE_INVALID_OBJECT_HANDLE;
 
         try {
-            if (db.at(handle).object_format == MTP_FORMAT_ASSOCIATION)
+            if (db.at(handle).object_format == MTP_FORMAT_ASSOCIATION && db.at(handle).watch_fd >= 0)
                 inotify_rm_watch(inotify_fd, db.at(handle).watch_fd);
 
             new_size = db.erase(handle);
@@ -1046,9 +1244,14 @@ public:
                  * we can safely ignore failures here, since the objects
                  * would not be reachable anyway.
                  */
-                BOOST_FOREACH(MtpObjectHandle i, db | boost::adaptors::map_keys) {
-                    if (db.at(i).parent == handle)
-                        db.erase(i);
+                std::vector<MtpObjectHandle> to_erase;
+                to_erase.reserve(64);
+                for (std::map<MtpObjectHandle, DbEntry>::const_iterator it = db.begin(); it != db.end(); ++it) {
+                    if (it->second.parent == handle)
+                        to_erase.push_back(it->first);
+                }
+                for (size_t i = 0; i < to_erase.size(); ++i) {
+                    db.erase(to_erase[i]);
                 }
 
                 return MTP_RESPONSE_OK;
@@ -1080,18 +1283,6 @@ public:
         return MTP_RESPONSE_OK;
     }
 
-    /*
-    virtual MtpResponseCode copyFile(MtpObjectHandle handle, MtpObjectHandle new_parent)
-    {
-        VLOG(2) << __PRETTY_FUNCTION__;
-
-        // duplicate DbEntry
-        // change parent
-
-        return MTP_RESPONSE_OK
-    }
-    */
-
     virtual MtpObjectHandleList* getObjectReferences(MtpObjectHandle handle)
     {
         VLOG(1) << __PRETTY_FUNCTION__;
@@ -1105,8 +1296,8 @@ public:
     }
 
     virtual MtpResponseCode setObjectReferences(
-        MtpObjectHandle handle,
-        MtpObjectHandleList* references)
+        MtpObjectHandle /*handle*/,
+        MtpObjectHandleList* /*references*/)
     {
         VLOG(1) << __PRETTY_FUNCTION__;
 
@@ -1121,6 +1312,7 @@ public:
     {
         VLOG(1) << __PRETTY_FUNCTION__ << MtpDebug::getObjectPropCodeName(property);
 
+        (void)format;
         MtpProperty* result = nullptr;
         switch(property)
         {
