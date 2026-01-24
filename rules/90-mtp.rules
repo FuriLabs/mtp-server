@@ -1,1 +1,1 @@
-SUBSYSTEM=="misc", KERNEL=="mtp_usb", ACTION=="add", RUN+="/usr/bin/chown furios:furios /dev/mtp_usb"
+SUBSYSTEM=="misc", KERNEL=="mtp_usb", ACTION=="add", RUN+="/usr/bin/chown 32011:32011 /dev/mtp_usb"
