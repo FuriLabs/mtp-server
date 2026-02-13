@@ -1,5 +1,10 @@
-// SPDX-License-Identifier: GPL-3.0
-// Copyright (C) 2024 Bardia Moshiri <fakeshell@bardia.tech>
+/**
+ * SPDX-License-Identifier: GPL-3.0
+ * Copyright (C) 2026 Bardia Moshiri <bardia@furilabs.com>
+ */
+
+#include <glib.h>
+#include <gio/gio.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +14,8 @@
 #include <fcntl.h>
 #include <sys/mount.h>
 #include <grp.h>
+#include <errno.h>
+
 #include "isodrive.h"
 #include "utils.h"
 
@@ -27,15 +34,63 @@ static const gchar introspection_xml[] =
   "    </method>"
   "    <method name='UnmountFile'>"
   "    </method>"
+  "    <method name='SetPowerRole'>"
+  "      <arg type='s' name='mode' direction='in'/>"
+  "    </method>"
+  "    <method name='SetDataRole'>"
+  "      <arg type='s' name='mode' direction='in'/>"
+  "    </method>"
+  "    <method name='SetPreferredRole'>"
+  "      <arg type='s' name='mode' direction='in'/>"
+  "    </method>"
+  "    <method name='SetVCONNSource'>"
+  "      <arg type='s' name='mode' direction='in'/>"
+  "    </method>"
   "    <property name='CurrentState' type='s' access='read'/>"
   "    <property name='MountedFile' type='s' access='read'/>"
+  "    <property name='PowerRole' type='s' access='read'/>"
+  "    <property name='DataRole' type='s' access='read'/>"
+  "    <property name='PreferredRole' type='s' access='read'/>"
+  "    <property name='VCONNSource' type='s' access='read'/>"
   "  </interface>"
   "</node>";
+
+static gchar *
+read_file (const gchar *filename,
+           GError     **error)
+{
+  gchar *content = NULL;
+  gsize length = 0;
+
+  if (g_file_get_contents (filename, &content, &length, error)) {
+    if (length > 0 && content[length - 1] == '\n')
+      content[length - 1] = '\0';
+    return content;
+  }
+
+  return NULL;
+}
+
+static gchar *
+find_text_between_brackets (const gchar *text)
+{
+  const gchar *start, *end;
+
+  start = g_strstr_len (text, -1, "[");
+  if (start != NULL) {
+    start++;
+    end = g_strstr_len (start, -1, "]");
+    if (end != NULL)
+      return g_strndup (start, end - start);
+  }
+
+  return g_strdup (text);
+}
 
 static void
 setup_configfs ()
 {
-  // Mount configfs if not already mounted
+  /* Mount configfs if not already mounted */
   if (access (CONFIGFS, F_OK) == -1) {
     if (mount ("none", CONFIGFS, "configfs", 0, NULL) == -1) {
       perror ("mount");
@@ -160,7 +215,8 @@ configure_accessory ()
   write_to_file (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409/configuration", "accessory");
 
   mkdir (GADGETDIR "/functions/" ACCESSORYCONFIG, 0755);
-  symlink (GADGETDIR "/functions/" ACCESSORYCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" ACCESSORYCONFIG);
+  symlink (GADGETDIR "/functions/" ACCESSORYCONFIG,
+           GADGETDIR "/configs/" CONFIGNAME "/" ACCESSORYCONFIG);
 
   char serialnumber[PROP_VALUE_MAX];
   char manufacturer[PROP_VALUE_MAX];
@@ -190,7 +246,8 @@ configure_acm ()
   mkdir (GADGETDIR "/functions/" ACMCONFIG, 0755);
   write_to_file (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409/configuration", "acm");
 
-  symlink (GADGETDIR "/functions/" ACMCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" ACMCONFIG);
+  symlink (GADGETDIR "/functions/" ACMCONFIG,
+           GADGETDIR "/configs/" CONFIGNAME "/" ACMCONFIG);
 
   char serialnumber[PROP_VALUE_MAX];
   char manufacturer[PROP_VALUE_MAX];
@@ -221,53 +278,13 @@ configure_none ()
   write_to_file (GADGETDIR "/UDC", "");
 }
 
-static void
-handle_method_call (GDBusConnection *connection,
-                    const gchar *sender,
-                    const gchar *object_path,
-                    const gchar *interface_name,
-                    const gchar *method_name,
-                    GVariant *parameters,
-                    GDBusMethodInvocation *invocation,
-                    gpointer user_data)
-{
-  if (g_strcmp0 (method_name, "SetUSBMode") == 0) {
-    gchar *mode;
-    g_variant_get (parameters, "(&s)", &mode);
-
-    if (g_strcmp0 (mode, "mtp") == 0)
-      configure_mtp ();
-    else if (g_strcmp0 (mode, "rndis") == 0)
-      configure_rndis ();
-    else if (g_strcmp0 (mode, "accessory") == 0)
-      configure_accessory ();
-    else if (g_strcmp0 (mode, "acm") == 0)
-      configure_acm ();
-    else if (g_strcmp0 (mode, "none") == 0)
-      configure_none ();
-  } else if (g_strcmp0 (method_name, "MountFile") == 0) {
-    gchar *path;
-    gboolean cdrom, readonly, force_configfs, force_usbgadget;
-    g_variant_get (parameters, "(&sbbbb)",
-                   &path,
-                   &cdrom,
-                   &readonly,
-                   &force_configfs,
-                   &force_usbgadget);
-
-    mount_iso_file (path, cdrom, readonly, force_configfs, force_usbgadget);
-  } else if (g_strcmp0 (method_name, "UnmountFile") == 0) {
-    unmount_iso_file ();
-  }
-
-  g_dbus_method_invocation_return_value (invocation, NULL);
-}
-
 static gchar *
 read_current_state ()
 {
   char path[256];
-  snprintf (path, sizeof(path), "%s/configs/%s/strings/0x409/configuration", GADGETDIR, CONFIGNAME);
+  snprintf (path, sizeof (path),
+            "%s/configs/%s/strings/0x409/configuration",
+            GADGETDIR, CONFIGNAME);
 
   FILE *file = fopen (path, "r");
   if (!file) {
@@ -287,6 +304,116 @@ read_current_state ()
   return g_strdup (buffer);
 }
 
+static void
+handle_method_call (GDBusConnection *connection,
+                    const gchar *sender,
+                    const gchar *object_path,
+                    const gchar *interface_name,
+                    const gchar *method_name,
+                    GVariant *parameters,
+                    GDBusMethodInvocation *invocation,
+                    gpointer user_data)
+{
+  if (g_strcmp0 (method_name, "SetUSBMode") == 0) {
+    const gchar *mode = NULL;
+    g_variant_get (parameters, "(&s)", &mode);
+
+    if (g_strcmp0 (mode, "mtp") == 0)
+      configure_mtp ();
+    else if (g_strcmp0 (mode, "rndis") == 0)
+      configure_rndis ();
+    else if (g_strcmp0 (mode, "accessory") == 0)
+      configure_accessory ();
+    else if (g_strcmp0 (mode, "acm") == 0)
+      configure_acm ();
+    else if (g_strcmp0 (mode, "none") == 0)
+      configure_none ();
+    else {
+      g_dbus_method_invocation_return_error (invocation,
+                                            G_DBUS_ERROR,
+                                            G_DBUS_ERROR_INVALID_ARGS,
+                                            "Invalid mode '%s' for method %s",
+                                            mode,
+                                            method_name);
+      return;
+    }
+
+    g_dbus_method_invocation_return_value (invocation, NULL);
+    return;
+  }
+
+  if (g_strcmp0 (method_name, "MountFile") == 0) {
+    const gchar *path = NULL;
+    gboolean cdrom = FALSE, readonly = FALSE, force_configfs = FALSE, force_usbgadget = FALSE;
+
+    g_variant_get (parameters, "(&sbbbb)",
+                   &path,
+                   &cdrom,
+                   &readonly,
+                   &force_configfs,
+                   &force_usbgadget);
+
+    mount_iso_file (path, cdrom, readonly, force_configfs, force_usbgadget);
+
+    g_dbus_method_invocation_return_value (invocation, NULL);
+    return;
+  }
+
+  if (g_strcmp0 (method_name, "UnmountFile") == 0) {
+    unmount_iso_file ();
+    g_dbus_method_invocation_return_value (invocation, NULL);
+    return;
+  }
+
+  if (g_strcmp0 (method_name, "SetPowerRole") == 0 ||
+      g_strcmp0 (method_name, "SetDataRole") == 0 ||
+      g_strcmp0 (method_name, "SetPreferredRole") == 0 ||
+      g_strcmp0 (method_name, "SetVCONNSource") == 0) {
+    const gchar *mode = NULL;
+    g_autofree gchar *file_path = NULL;
+    gboolean valid_input = FALSE;
+
+    g_variant_get (parameters, "(&s)", &mode);
+
+    if (g_strcmp0 (method_name, "SetPowerRole") == 0) {
+      file_path = g_build_filename (TYPEC_PORT_PATH, "power_role", NULL);
+      valid_input = (g_strcmp0 (mode, "source") == 0 || g_strcmp0 (mode, "sink") == 0);
+    } else if (g_strcmp0 (method_name, "SetDataRole") == 0) {
+      file_path = g_build_filename (TYPEC_PORT_PATH, "data_role", NULL);
+      valid_input = (g_strcmp0 (mode, "host") == 0 || g_strcmp0 (mode, "device") == 0);
+    } else if (g_strcmp0 (method_name, "SetPreferredRole") == 0) {
+      file_path = g_build_filename (TYPEC_PORT_PATH, "preferred_role", NULL);
+      valid_input = (g_strcmp0 (mode, "source") == 0 ||
+                     g_strcmp0 (mode, "sink") == 0 ||
+                     g_strcmp0 (mode, "none") == 0);
+    } else if (g_strcmp0 (method_name, "SetVCONNSource") == 0) {
+      file_path = g_build_filename (TYPEC_PORT_PATH, "vconn_source", NULL);
+      valid_input = (g_strcmp0 (mode, "yes") == 0 || g_strcmp0 (mode, "no") == 0);
+    }
+
+    if (!valid_input) {
+      g_dbus_method_invocation_return_error (invocation,
+                                             G_DBUS_ERROR,
+                                             G_DBUS_ERROR_INVALID_ARGS,
+                                             "Invalid mode '%s' for method %s",
+                                             mode,
+                                             method_name);
+      return;
+    }
+
+    write_to_file (file_path, mode);
+
+    g_dbus_method_invocation_return_value (invocation, g_variant_new ("()"));
+    return;
+  }
+
+  g_dbus_method_invocation_return_error (invocation,
+                                        G_DBUS_ERROR,
+                                        G_DBUS_ERROR_UNKNOWN_METHOD,
+                                        "Unknown method %s",
+                                        method_name);
+}
+
 static GVariant *
 handle_get_property (GDBusConnection *connection,
                      const gchar *sender,
@@ -301,11 +428,42 @@ handle_get_property (GDBusConnection *connection,
     GVariant *result = g_variant_new_string (state);
     g_free (state);
     return result;
-  } else if (g_strcmp0 (property_name, "MountedFile") == 0) {
+  }
+
+  if (g_strcmp0 (property_name, "MountedFile") == 0) {
     gchar *file = read_mounted_file ();
     GVariant *result = g_variant_new_string (file);
     g_free (file);
     return result;
+  }
+
+  if (g_strcmp0 (property_name, "PowerRole") == 0 ||
+      g_strcmp0 (property_name, "DataRole") == 0 ||
+      g_strcmp0 (property_name, "PreferredRole") == 0 ||
+      g_strcmp0 (property_name, "VCONNSource") == 0) {
+    g_autofree gchar *filepath = NULL;
+    g_autofree gchar *state = NULL;
+
+    if (g_strcmp0 (property_name, "PowerRole") == 0)
+      filepath = g_build_filename (TYPEC_PORT_PATH, "power_role", NULL);
+    else if (g_strcmp0 (property_name, "DataRole") == 0)
+      filepath = g_build_filename (TYPEC_PORT_PATH, "data_role", NULL);
+    else if (g_strcmp0 (property_name, "PreferredRole") == 0)
+      filepath = g_build_filename (TYPEC_PORT_PATH, "preferred_role", NULL);
+    else if (g_strcmp0 (property_name, "VCONNSource") == 0)
+      filepath = g_build_filename (TYPEC_PORT_PATH, "vconn_source", NULL);
+
+    state = read_file (filepath, error);
+    if (state == NULL)
+      return NULL;
+
+    if (g_strcmp0 (property_name, "PowerRole") == 0 ||
+        g_strcmp0 (property_name, "DataRole") == 0) {
+      g_autofree gchar *bracketed_text = find_text_between_brackets (state);
+      return g_variant_new_string (bracketed_text);
+    }
+
+    return g_variant_new_string (state);
   }
 
   g_set_error (error,
@@ -316,8 +474,7 @@ handle_get_property (GDBusConnection *connection,
   return NULL;
 }
 
-static const
-GDBusInterfaceVTable interface_vtable = {
+static const GDBusInterfaceVTable interface_vtable = {
   .method_call = handle_method_call,
   .get_property = handle_get_property,
   .set_property = NULL
@@ -325,13 +482,13 @@ GDBusInterfaceVTable interface_vtable = {
 
 static void
 on_bus_acquired (GDBusConnection *connection,
-                 const gchar *name, gpointer user_data)
+                 const gchar *name,
+                 gpointer user_data)
 {
   GDBusNodeInfo *introspection_data = (GDBusNodeInfo *) user_data;
-
   GError *error = NULL;
 
-  g_dbus_connection_register_object(
+  g_dbus_connection_register_object (
     connection,
     "/io/FuriOS/USBConfig",
     introspection_data->interfaces[0],
@@ -348,14 +505,16 @@ on_bus_acquired (GDBusConnection *connection,
 
 static void
 on_name_acquired (GDBusConnection *connection,
-                  const gchar *name, gpointer user_data)
+                  const gchar *name,
+                  gpointer user_data)
 {
   g_debug ("Name acquired: %s", name);
 }
 
 static void
 on_name_lost (GDBusConnection *connection,
-              const gchar *name, gpointer user_data)
+              const gchar *name,
+              gpointer user_data)
 {
   g_debug ("Name lost: %s", name);
 }
@@ -368,13 +527,14 @@ main (int argc, char *argv[])
   GError *error = NULL;
 
   GDBusNodeInfo *introspection_data = g_dbus_node_info_new_for_xml (introspection_xml, &error);
+
   if (error) {
     g_printerr ("Error parsing introspection XML: %s\n", error->message);
     g_error_free (error);
     return 1;
   }
 
-  owner_id = g_bus_own_name(
+  owner_id = g_bus_own_name (
     G_BUS_TYPE_SYSTEM,
     "io.FuriOS.USBConfig",
     G_BUS_NAME_OWNER_FLAGS_NONE,

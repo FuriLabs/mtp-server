@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: GPL-3.0
-// Copyright (C) 2024 Bardia Moshiri <fakeshell@bardia.tech>
+/**
+ * SPDX-License-Identifier: GPL-3.0
+ * Copyright (C) 2026 Bardia Moshiri <bardia@furilabs.com>
+ */
 
 #ifndef UTILS_H
 #define UTILS_H
@@ -28,6 +30,8 @@
 #define BCDUSB "0x0200"
 
 #define MTP_USB "/dev/mtp_usb"
+
+#define TYPEC_PORT_PATH "/sys/class/typec/port0"
 
 void
 write_to_file (const char *path,

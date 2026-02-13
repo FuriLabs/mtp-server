@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: GPL-3.0
-// Copyright (C) 2024 Bardia Moshiri <fakeshell@bardia.tech>
+/**
+ * SPDX-License-Identifier: GPL-3.0
+ * Copyright (C) 2026 Bardia Moshiri <bardia@furilabs.com>
+ */
 
 #include <stdio.h>
 #include <string.h>

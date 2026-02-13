@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: GPL-3.0
-// Copyright (C) 2024 Bardia Moshiri <fakeshell@bardia.tech>
+/**
+ * SPDX-License-Identifier: GPL-3.0
+ * Copyright (C) 2026 Bardia Moshiri <bardia@furilabs.com>
+ */
 
 #include <stdio.h>
 #include <string.h>
@@ -29,7 +31,7 @@ is_configfs_supported (void)
 
   endmntent (mounts);
 
-  // Check alternate Android location
+  /* Check alternate Android location */
   if (!supported) {
     DIR *dir = opendir ("/config/usb_gadget");
     if (dir) {
@@ -56,7 +58,7 @@ configure_mass_storage_configfs (const char *iso_path,
   char controller[PROP_VALUE_MAX];
   property_get ("sys.usb.controller", controller, "usb0");
 
-  // this is \n to flush LUN and UDC. writing an empty string is not enough
+  /* this is \n to flush LUN and UDC. writing an empty string is not enough */
   write_to_file (GADGETDIR "/UDC", "\n");
 
   char functions_dir[256], mass_storage_dir[256], lun_dir[256];
@@ -83,7 +85,7 @@ configure_mass_storage_configfs (const char *iso_path,
   snprintf (lun_ro, sizeof (lun_ro),
             "%s/functions/%s/lun.0/ro", GADGETDIR, MASS_STORAGE);
 
-  // Empty the lun file if it exists
+  /* Empty the lun file if it exists */
   struct stat st;
   if (stat (lun_file, &st) == 0)
     write_to_file (lun_file, "\n");
@@ -110,7 +112,7 @@ configure_mass_storage_configfs (const char *iso_path,
       rmdir (mass_storage_dir);
   }
 
-  // Re-enable UDC
+  /* Re-enable UDC */
   write_to_file (GADGETDIR "/UDC", controller);
 }
 
