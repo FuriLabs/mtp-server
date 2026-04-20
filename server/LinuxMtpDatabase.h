@@ -93,8 +93,8 @@ private:
     boost::thread notifier_thread;
     boost::thread io_service_thread;
 
-    asio::io_service io_svc;
-    asio::io_service::work work;
+    asio::io_context io_svc;
+    asio::executor_work_guard<asio::io_context::executor_type> work;
     asio::posix::stream_descriptor stream_desc;
     asio::streambuf buf;
     int inotify_fd;
@@ -437,28 +437,54 @@ private:
 
     void read_more_notify()
     {
-        stream_desc.async_read_some(buf.prepare(buf.max_size()),
+        std::size_t available = buf.max_size() - buf.size();
+
+        if (available == 0) {
+            LOG(WARNING) << "LinuxMtpDatabase inotify buffer full, dropping buffered data";
+            buf.consume(buf.size());
+            available = buf.max_size();
+        }
+
+        stream_desc.async_read_some(buf.prepare(available),
                                     boost::bind(&LinuxMtpDatabase::inotify_handler,
                                                 this,
                                                 asio::placeholders::error,
                                                 asio::placeholders::bytes_transferred));
     }
 
-    void inotify_handler(const boost::system::error_code&,
+    void inotify_handler(const boost::system::error_code& error,
                          std::size_t transferred)
     {
+        if (error) {
+            VLOG(1) << "inotify handler error: " << error.message();
+            return;
+        }
+
+        buf.commit(transferred);
+
         size_t processed = 0;
 
-        while (transferred - processed >= sizeof(inotify_event))
+        while (buf.size() - processed >= sizeof(inotify_event))
         {
-            const char* cdata = processed + asio::buffer_cast<const char*>(buf.data());
-            const inotify_event* ievent = reinterpret_cast<const inotify_event*>(cdata);
+            auto data = buf.data();
+            auto begin = asio::buffers_begin(data);
+
+            if (buf.size() - processed < sizeof(inotify_event))
+                break;
+
+            const char* cdata = &(*(begin + processed));
+            const inotify_event* ievent =
+                reinterpret_cast<const inotify_event*>(cdata);
+
+            if (buf.size() - processed < sizeof(inotify_event) + ievent->len)
+                break;
+
             MtpObjectHandle parent = 0;
             path p;
 
             processed += sizeof(inotify_event) + ievent->len;
 
-            BOOST_FOREACH(MtpObjectHandle i, db | boost::adaptors::map_keys) {
+            BOOST_FOREACH (MtpObjectHandle i, db | boost::adaptors::map_keys) {
                 if (db.at(i).watch_fd == ievent->wd) {
                     parent = i;
                     break;
@@ -475,7 +501,8 @@ private:
             if (ievent->len > 0 && (ievent->mask & IN_MODIFY))
             {
                 VLOG(2) << __PRETTY_FUNCTION__ << ": file modified: " << p.string();
-                BOOST_FOREACH(MtpObjectHandle i, db | boost::adaptors::map_keys) {
+
+                BOOST_FOREACH (MtpObjectHandle i, db | boost::adaptors::map_keys) {
                     if (db.at(i).path == p.string()) {
                         boost::system::error_code ec;
                         uintmax_t sz = file_size(p, ec);
@@ -494,7 +521,8 @@ private:
                 bool exists_in_db = false;
 
                 VLOG(2) << __PRETTY_FUNCTION__ << ": file created: " << p.string();
-                BOOST_FOREACH(MtpObjectHandle i, db | boost::adaptors::map_keys) {
+
+                BOOST_FOREACH (MtpObjectHandle i, db | boost::adaptors::map_keys) {
                     if (db.at(i).path == p.string()) {
                         exists_in_db = true;
                         break;
@@ -514,10 +542,11 @@ private:
 
                     /* try to deal with it as if it was a file. */
                     MtpObjectHandle h = add_file_entry(p, parent_handle, db.at(parent).storage_id);
+
                     if (h != 0) {
-                        boost::system::error_code ec3;
-                        file_status st3 = symlink_status(p, ec3);
-                        if (!ec3 && is_directory(st3))
+                        boost::system::error_code ec;
+                        file_status st = symlink_status(p, ec);
+                        if (!ec && is_directory(st))
                             parse_directory(p, h, db.at(parent).storage_id);
                     }
                 }
@@ -525,7 +554,8 @@ private:
             else if (ievent->len > 0 && (ievent->mask & IN_DELETE))
             {
                 VLOG(2) << __PRETTY_FUNCTION__ << ": file deleted: " << p.string();
-                BOOST_FOREACH(MtpObjectHandle i, db | boost::adaptors::map_keys) {
+
+                BOOST_FOREACH (MtpObjectHandle i, db | boost::adaptors::map_keys) {
                     if (db.at(i).path == p.string()) {
                         VLOG(2) << "deleting file at handle " << i;
                         deleteFile(i);
@@ -537,14 +567,15 @@ private:
             }
         }
 
+        buf.consume(processed);
         read_more_notify();
     }
 
 public:
     LinuxMtpDatabase():
         counter(1),
+        work(asio::make_work_guard(io_svc)),
         stream_desc(io_svc),
-        work(io_svc),
         buf(1024)
     {
         local_server = nullptr;
@@ -559,13 +590,16 @@ public:
         db = std::map<MtpObjectHandle, DbEntry>();
 
         notifier_thread = boost::thread(&LinuxMtpDatabase::read_more_notify, this);
-        io_service_thread = boost::thread(boost::bind(&asio::io_service::run, &io_svc));
+        io_service_thread = boost::thread([this]() { io_svc.run(); });
     }
 
     virtual ~LinuxMtpDatabase() {
+        work.reset();
         io_svc.stop();
-        notifier_thread.detach();
-        io_service_thread.join();
+        if (notifier_thread.joinable())
+            notifier_thread.join();
+        if (io_service_thread.joinable())
+            io_service_thread.join();
         close(inotify_fd);
     }
 
@@ -835,7 +869,7 @@ public:
                     packet.putString(date);
                     break;
                 case MTP_PROPERTY_HIDDEN: packet.putUInt16(0); break;
-                case MTP_PROPERTY_NON_CONSUMABLE: break;
+                case MTP_PROPERTY_NON_CONSUMABLE:
                     if (db.at(handle).object_format == MTP_FORMAT_ASSOCIATION)
                         packet.putUInt16(0); // folders are non-consumable
                     else

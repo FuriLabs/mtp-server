@@ -157,8 +157,8 @@ private:
     boost::thread notifier_thread;
     boost::thread io_service_thread;
 
-    asio::io_service io_svc;
-    asio::io_service::work work;
+    asio::io_context io_svc;
+    asio::executor_work_guard<asio::io_context::executor_type> work;
     asio::posix::stream_descriptor stream_desc;
     asio::streambuf buf;
 
@@ -209,20 +209,46 @@ private:
     void read_more_notify() {
         VLOG(1) << __PRETTY_FUNCTION__;
 
-        stream_desc.async_read_some(buf.prepare(buf.max_size()),
+        std::size_t available = buf.max_size() - buf.size();
+
+        if (available == 0) {
+            LOG(WARNING) << "MtpDaemon inotify buffer full, dropping buffered data";
+            buf.consume(buf.size());
+            available = buf.max_size();
+        }
+
+        stream_desc.async_read_some(buf.prepare(available),
                                     boost::bind(&MtpDaemon::inotify_handler,
                                                 this,
                                                 asio::placeholders::error,
                                                 asio::placeholders::bytes_transferred));
     }
 
-    void inotify_handler(const boost::system::error_code&,
+    void inotify_handler(const boost::system::error_code& error,
                          std::size_t transferred) {
+        if (error) {
+            VLOG(1) << "daemon inotify handler error: " << error.message();
+            return;
+        }
+
+        buf.commit(transferred);
+
         size_t processed = 0;
 
-        while (transferred - processed >= sizeof(inotify_event)) {
-            const char* cdata = processed + asio::buffer_cast<const char*>(buf.data());
-            const inotify_event* ievent = reinterpret_cast<const inotify_event*>(cdata);
+        while (buf.size() - processed >= sizeof(inotify_event)) {
+            auto data = buf.data();
+            auto begin = asio::buffers_begin(data);
+
+            if (buf.size() - processed < sizeof(inotify_event))
+                break;
+
+            const char* cdata = &(*(begin + processed));
+            const inotify_event* ievent =
+                reinterpret_cast<const inotify_event*>(cdata);
+
+            if (buf.size() - processed < sizeof(inotify_event) + ievent->len)
+                break;
+
             path storage_path ("/media");
 
             processed += sizeof(inotify_event) + ievent->len;
@@ -242,7 +268,7 @@ private:
                 VLOG(1) << "Storage was removed: " << ievent->name;
 
                 // Try to match to which storage was removed.
-                BOOST_FOREACH(std::string name, removables | boost::adaptors::map_keys) {
+                BOOST_FOREACH (std::string name, removables | boost::adaptors::map_keys) {
                     if (name == ievent->name) {
                         auto t = removables.at(name);
                         MtpStorage *storage = std::get<0>(t);
@@ -263,6 +289,7 @@ private:
             }
         }
 
+        buf.consume(processed);
         read_more_notify();
     }
 
@@ -366,9 +393,17 @@ private:
 
 public:
     MtpDaemon(int fd):
+        server(nullptr),
+        home_storage(nullptr),
+        sd_card(nullptr),
+        mtp_database(nullptr),
+        work(asio::make_work_guard(io_svc)),
         stream_desc(io_svc),
-        work(io_svc),
-        buf(1024) {
+        buf(1024),
+        inotify_fd(-1),
+        watch_fd(-1),
+        media_fd(-1),
+        home_storage_added(false) {
         userdata = getpwuid(getuid());
 
         // Removable storage hacks
@@ -379,7 +414,7 @@ public:
 
         stream_desc.assign(inotify_fd);
         notifier_thread = boost::thread(&MtpDaemon::read_more_notify, this);
-        io_service_thread = boost::thread(boost::bind(&asio::io_service::run, &io_svc));
+        io_service_thread = boost::thread([this]() { io_svc.run(); });
 
         // MTP database.
         mtp_database = new LinuxMtpDatabase();
@@ -437,14 +472,23 @@ public:
 
     ~MtpDaemon() {
         // Cleanup
-        inotify_rm_watch(inotify_fd, watch_fd);
+        if (watch_fd >= 0)
+            inotify_rm_watch(inotify_fd, watch_fd);
+        if (media_fd >= 0)
+            inotify_rm_watch(inotify_fd, media_fd);
+
+        work.reset();
         io_svc.stop();
-        notifier_thread.detach();
-        io_service_thread.join();
-        close(inotify_fd);
+        if (notifier_thread.joinable())
+            notifier_thread.join();
+        if (io_service_thread.joinable())
+            io_service_thread.join();
+        if (inotify_fd >= 0)
+            close(inotify_fd);
 
         dbus_thread.interrupt();
-        dbus_thread.join();
+        if (dbus_thread.joinable())
+            dbus_thread.join();
 
         delete server;
         delete home_storage;
