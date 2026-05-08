@@ -12,7 +12,7 @@ set(MTP_VERSION_MAJOR 1)
 set(MTP_VERSION_MINOR 0)
 set(MTP_VERSION_PATCH 0)
 
-find_package(Boost REQUIRED COMPONENTS thread filesystem)
+find_package(Boost CONFIG REQUIRED COMPONENTS thread filesystem)
 pkg_check_modules(DBUSCPP REQUIRED dbus-cpp)
 pkg_check_modules(GLOG REQUIRED libglog)
 
@@ -59,7 +59,6 @@ set(
 include_directories(
     include/
     libusbhost/include
-    ${Boost_INCLUDE_DIRS}
     ${DBUSCPP_INCLUDE_DIRS}
 )
 
@@ -70,6 +69,8 @@ target_compile_features(mtpserver PUBLIC cxx_std_11)
 target_link_libraries(
   mtpserver
   android-properties
+  Boost::thread
+  Boost::filesystem
   ${GLOG_LIBRARIES}
   ${DBUSCPP_LIBRARIES}
 )
