@@ -48,12 +48,23 @@ static const gchar introspection_xml[] =
   "    </method>"
   "    <property name='CurrentState' type='s' access='read'/>"
   "    <property name='MountedFile' type='s' access='read'/>"
+  "    <property name='SupportedUSBModes' type='as' access='read'/>"
   "    <property name='PowerRole' type='s' access='read'/>"
   "    <property name='DataRole' type='s' access='read'/>"
   "    <property name='PreferredRole' type='s' access='read'/>"
   "    <property name='VCONNSource' type='s' access='read'/>"
   "  </interface>"
   "</node>";
+
+static gboolean
+is_valid_usb_mode (const gchar *mode)
+{
+  return g_strcmp0 (mode, "none") == 0 ||
+         g_strcmp0 (mode, "mtp") == 0 ||
+         g_strcmp0 (mode, "rndis") == 0 ||
+         g_strcmp0 (mode, "accessory") == 0 ||
+         g_strcmp0 (mode, "acm") == 0;
+}
 
 static gchar *
 read_file (const gchar *filename,
@@ -71,6 +82,71 @@ read_file (const gchar *filename,
   return NULL;
 }
 
+static void
+save_usb_mode (const gchar *mode)
+{
+  GError *error = NULL;
+  g_autofree gchar *content = NULL;
+
+  if (g_mkdir_with_parents (USB_CONFIG_CACHE_DIR, 0755) == -1) {
+    g_warning ("Failed to create cache directory %s: %s",
+               USB_CONFIG_CACHE_DIR,
+               g_strerror (errno));
+    return;
+  }
+
+  content = g_strdup_printf ("usb_mode=%s\n", mode);
+
+  if (!g_file_set_contents (USB_CONFIG_CACHE_FILE, content, -1, &error)) {
+    g_warning ("Failed to save USB mode to %s: %s",
+               USB_CONFIG_CACHE_FILE,
+               error->message);
+    g_error_free (error);
+  }
+}
+
+static gchar *
+load_usb_mode (void)
+{
+  GError *error = NULL;
+  g_autofree gchar *content = NULL;
+  gchar **lines = NULL;
+  gchar *mode = NULL;
+
+  content = read_file (USB_CONFIG_CACHE_FILE, &error);
+
+  if (content == NULL) {
+    if (error != NULL)
+      g_error_free (error);
+
+    return g_strdup ("none");
+  }
+
+  lines = g_strsplit (content, "\n", -1);
+
+  for (gint i = 0; lines[i] != NULL; i++) {
+    if (g_str_has_prefix (lines[i], "usb_mode=")) {
+      mode = g_strdup (lines[i] + strlen ("usb_mode="));
+      break;
+    }
+  }
+
+  g_strfreev (lines);
+
+  if (mode == NULL)
+    return g_strdup ("none");
+
+  g_strstrip (mode);
+
+  if (!is_valid_usb_mode (mode)) {
+    g_warning ("Ignoring invalid saved USB mode '%s'", mode);
+    g_free (mode);
+    return g_strdup ("none");
+  }
+
+  return mode;
+}
+
 static gchar *
 find_text_between_brackets (const gchar *text)
 {
@@ -85,6 +161,21 @@ find_text_between_brackets (const gchar *text)
   }
 
   return g_strdup (text);
+}
+
+static GVariant *
+get_supported_usb_modes (void)
+{
+  const gchar *modes[] = {
+    "none",
+    "mtp",
+    "rndis",
+    "accessory",
+    "acm",
+    NULL
+  };
+
+  return g_variant_new_strv (modes, -1);
 }
 
 static void
@@ -126,6 +217,25 @@ cleanup_configfs ()
   unlink (GADGETDIR "/configs/" CONFIGNAME "/" RNDISBAMCONFIG);
   unlink (GADGETDIR "/configs/" CONFIGNAME "/" ACCESSORYCONFIG);
   unlink (GADGETDIR "/configs/" CONFIGNAME "/" ACMCONFIG);
+}
+
+static void
+configure_gadget_strings (void)
+{
+  char serialnumber[PROP_VALUE_MAX];
+  char manufacturer[PROP_VALUE_MAX];
+  char product[PROP_VALUE_MAX];
+  char controller[PROP_VALUE_MAX];
+
+  property_get ("ro.serialno", serialnumber, "");
+  property_get ("ro.product.vendor.manufacturer", manufacturer, "");
+  property_get ("ro.product.vendor.model", product, "");
+  property_get ("sys.usb.controller", controller, "");
+
+  write_to_file (GADGETDIR "/strings/0x409/serialnumber", serialnumber);
+  write_to_file (GADGETDIR "/strings/0x409/manufacturer", manufacturer);
+  write_to_file (GADGETDIR "/strings/0x409/product", product);
+  write_to_file (GADGETDIR "/UDC", controller);
 }
 
 static void
@@ -185,22 +295,10 @@ configure_rndis ()
   write_to_file (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409/configuration", "rndis");
 
   symlink (GADGETDIR "/functions/" RNDISCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" RNDISCONFIG);
+
   symlink (GADGETDIR "/functions/" RNDISBAMCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" RNDISBAMCONFIG);
 
-  char serialnumber[PROP_VALUE_MAX];
-  char manufacturer[PROP_VALUE_MAX];
-  char product[PROP_VALUE_MAX];
-  char controller[PROP_VALUE_MAX];
-
-  property_get ("ro.serialno", serialnumber, "");
-  property_get ("ro.product.vendor.manufacturer", manufacturer, "");
-  property_get ("ro.product.vendor.model", product, "");
-  property_get ("sys.usb.controller", controller, "");
-
-  write_to_file (GADGETDIR "/strings/0x409/serialnumber", serialnumber);
-  write_to_file (GADGETDIR "/strings/0x409/manufacturer", manufacturer);
-  write_to_file (GADGETDIR "/strings/0x409/product", product);
-  write_to_file (GADGETDIR "/UDC", controller);
+  configure_gadget_strings ();
 }
 
 static void
@@ -215,23 +313,10 @@ configure_accessory ()
   write_to_file (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409/configuration", "accessory");
 
   mkdir (GADGETDIR "/functions/" ACCESSORYCONFIG, 0755);
-  symlink (GADGETDIR "/functions/" ACCESSORYCONFIG,
-           GADGETDIR "/configs/" CONFIGNAME "/" ACCESSORYCONFIG);
 
-  char serialnumber[PROP_VALUE_MAX];
-  char manufacturer[PROP_VALUE_MAX];
-  char product[PROP_VALUE_MAX];
-  char controller[PROP_VALUE_MAX];
+  symlink (GADGETDIR "/functions/" ACCESSORYCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" ACCESSORYCONFIG);
 
-  property_get ("ro.serialno", serialnumber, "");
-  property_get ("ro.product.vendor.manufacturer", manufacturer, "");
-  property_get ("ro.product.vendor.model", product, "");
-  property_get ("sys.usb.controller", controller, "");
-
-  write_to_file (GADGETDIR "/strings/0x409/serialnumber", serialnumber);
-  write_to_file (GADGETDIR "/strings/0x409/manufacturer", manufacturer);
-  write_to_file (GADGETDIR "/strings/0x409/product", product);
-  write_to_file (GADGETDIR "/UDC", controller);
+  configure_gadget_strings ();
 }
 
 static void
@@ -244,55 +329,65 @@ configure_acm ()
   cleanup_configfs ();
 
   mkdir (GADGETDIR "/functions/" ACMCONFIG, 0755);
+
   write_to_file (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409/configuration", "acm");
 
-  symlink (GADGETDIR "/functions/" ACMCONFIG,
-           GADGETDIR "/configs/" CONFIGNAME "/" ACMCONFIG);
+  symlink (GADGETDIR "/functions/" ACMCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" ACMCONFIG);
 
-  char serialnumber[PROP_VALUE_MAX];
-  char manufacturer[PROP_VALUE_MAX];
-  char product[PROP_VALUE_MAX];
-  char controller[PROP_VALUE_MAX];
-
-  property_get ("ro.serialno", serialnumber, "");
-  property_get ("ro.product.vendor.manufacturer", manufacturer, "");
-  property_get ("ro.product.vendor.model", product, "");
-  property_get ("sys.usb.controller", controller, "");
-
-  write_to_file (GADGETDIR "/strings/0x409/serialnumber", serialnumber);
-  write_to_file (GADGETDIR "/strings/0x409/manufacturer", manufacturer);
-  write_to_file (GADGETDIR "/strings/0x409/product", product);
-  write_to_file (GADGETDIR "/UDC", controller);
+  configure_gadget_strings ();
 }
 
-static void
-configure_none ()
+static gboolean
+apply_usb_mode (const gchar  *mode,
+                gboolean      persist,
+                GError      **error)
 {
-  g_debug ("Configuring for mode NONE");
+  if (!is_valid_usb_mode (mode)) {
+    g_set_error (error,
+                 G_IO_ERROR,
+                 G_IO_ERROR_INVALID_ARGUMENT,
+                 "Invalid USB mode '%s'",
+                 mode);
+    return FALSE;
+  }
 
-  setup_configfs ();
+  if (g_strcmp0 (mode, "mtp") == 0)
+    configure_mtp ();
+  else if (g_strcmp0 (mode, "rndis") == 0)
+    configure_rndis ();
+  else if (g_strcmp0 (mode, "accessory") == 0)
+    configure_accessory ();
+  else if (g_strcmp0 (mode, "acm") == 0)
+    configure_acm ();
+  else if (g_strcmp0 (mode, "none") == 0)
+    configure_acm ();
 
-  cleanup_configfs ();
+  if (persist)
+    save_usb_mode (mode);
 
-  write_to_file (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409/configuration", "none");
-  write_to_file (GADGETDIR "/UDC", "");
+  return TRUE;
 }
 
 static gchar *
 read_current_state ()
 {
   char path[256];
-  snprintf (path, sizeof (path),
+
+  snprintf (path,
+            sizeof (path),
             "%s/configs/%s/strings/0x409/configuration",
-            GADGETDIR, CONFIGNAME);
+            GADGETDIR,
+            CONFIGNAME);
 
   FILE *file = fopen (path, "r");
+
   if (!file) {
     perror ("fopen");
     return g_strdup ("none");
   }
 
   char buffer[256];
+
   if (!fgets (buffer, sizeof (buffer), file)) {
     perror ("fgets");
     fclose (file);
@@ -300,7 +395,9 @@ read_current_state ()
   }
 
   fclose (file);
+
   buffer[strcspn (buffer, "\n")] = '\0';
+
   return g_strdup (buffer);
 }
 
@@ -316,25 +413,17 @@ handle_method_call (GDBusConnection *connection,
 {
   if (g_strcmp0 (method_name, "SetUSBMode") == 0) {
     const gchar *mode = NULL;
+    GError *error = NULL;
+
     g_variant_get (parameters, "(&s)", &mode);
 
-    if (g_strcmp0 (mode, "mtp") == 0)
-      configure_mtp ();
-    else if (g_strcmp0 (mode, "rndis") == 0)
-      configure_rndis ();
-    else if (g_strcmp0 (mode, "accessory") == 0)
-      configure_accessory ();
-    else if (g_strcmp0 (mode, "acm") == 0)
-      configure_acm ();
-    else if (g_strcmp0 (mode, "none") == 0)
-      configure_none ();
-    else {
+    if (!apply_usb_mode (mode, TRUE, &error)) {
       g_dbus_method_invocation_return_error (invocation,
-                                            G_DBUS_ERROR,
-                                            G_DBUS_ERROR_INVALID_ARGS,
-                                            "Invalid mode '%s' for method %s",
-                                            mode,
-                                            method_name);
+                                             G_DBUS_ERROR,
+                                             G_DBUS_ERROR_INVALID_ARGS,
+                                             "%s",
+                                             error->message);
+      g_error_free (error);
       return;
     }
 
@@ -437,6 +526,9 @@ handle_get_property (GDBusConnection *connection,
     return result;
   }
 
+  if (g_strcmp0 (property_name, "SupportedUSBModes") == 0)
+    return get_supported_usb_modes ();
+
   if (g_strcmp0 (property_name, "PowerRole") == 0 ||
       g_strcmp0 (property_name, "DataRole") == 0 ||
       g_strcmp0 (property_name, "PreferredRole") == 0 ||
@@ -520,11 +612,12 @@ on_name_lost (GDBusConnection *connection,
 }
 
 int
-main (int argc, char *argv[])
+main (void)
 {
   GMainLoop *loop;
   guint owner_id;
   GError *error = NULL;
+  g_autofree gchar *saved_mode = NULL;
 
   GDBusNodeInfo *introspection_data = g_dbus_node_info_new_for_xml (introspection_xml, &error);
 
@@ -532,6 +625,15 @@ main (int argc, char *argv[])
     g_printerr ("Error parsing introspection XML: %s\n", error->message);
     g_error_free (error);
     return 1;
+  }
+
+  saved_mode = load_usb_mode ();
+  g_debug ("Applying saved USB mode: %s", saved_mode);
+
+  if (!apply_usb_mode (saved_mode, FALSE, &error)) {
+    g_warning ("Failed to apply saved USB mode '%s': %s", saved_mode, error->message);
+    g_clear_error (&error);
+    apply_usb_mode ("none", FALSE, NULL);
   }
 
   owner_id = g_bus_own_name (

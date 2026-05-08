@@ -20,6 +20,9 @@
 #define ACCESSORYCONFIG "accessory.usb0"
 #define ACMCONFIG "acm.0"
 
+#define USB_CONFIG_CACHE_DIR "/var/cache/usb-config"
+#define USB_CONFIG_CACHE_FILE "/var/cache/usb-config/usb-config.cfg"
+
 #define ANDROID0_SYSFS_ENABLE "/sys/devices/virtual/android_usb/android0/enable"
 #define ANDROID0_SYSFS_IMG_FILE "/sys/devices/virtual/android_usb/android0/f_mass_storage/lun/file"
 #define ANDROID0_SYSFS_FEATURES "/sys/devices/virtual/android_usb/android0/functions"

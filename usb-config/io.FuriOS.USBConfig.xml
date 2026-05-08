@@ -1,20 +1,45 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+
 <node>
-  <interface name='io.FuriOS.USBConfig'>
-    <method name='SetUSBMode'>
-      <arg type='s' name='mode' direction='in'/>
+  <interface name="io.FuriOS.USBConfig">
+    <method name="SetUSBMode">
+      <arg type="s" name="mode" direction="in"/>
     </method>
-    <method name='MountFile'>
-      <arg type='s' name='path' direction='in'/>
-      <arg type='b' name='cdrom' direction='in'/>
-      <arg type='b' name='readonly' direction='in'/>
-      <arg type='b' name='force_configfs' direction='in'/>
-      <arg type='b' name='force_usbgadget' direction='in'/>
+
+    <method name="MountFile">
+      <arg type="s" name="path" direction="in"/>
+      <arg type="b" name="cdrom" direction="in"/>
+      <arg type="b" name="readonly" direction="in"/>
+      <arg type="b" name="force_configfs" direction="in"/>
+      <arg type="b" name="force_usbgadget" direction="in"/>
     </method>
-    <method name='UnmountFile'>
+
+    <method name="UnmountFile">
     </method>
-    <property name='CurrentState' type='s' access='read'/>
-    <property name='MountedFile' type='s' access='read'/>
+
+    <method name="SetPowerRole">
+      <arg type="s" name="mode" direction="in"/>
+    </method>
+
+    <method name="SetDataRole">
+      <arg type="s" name="mode" direction="in"/>
+    </method>
+
+    <method name="SetPreferredRole">
+      <arg type="s" name="mode" direction="in"/>
+    </method>
+
+    <method name="SetVCONNSource">
+      <arg type="s" name="mode" direction="in"/>
+    </method>
+
+    <property name="CurrentState" type="s" access="read"/>
+    <property name="MountedFile" type="s" access="read"/>
+    <property name="SupportedUSBModes" type="as" access="read"/>
+    <property name="PowerRole" type="s" access="read"/>
+    <property name="DataRole" type="s" access="read"/>
+    <property name="PreferredRole" type="s" access="read"/>
+    <property name="VCONNSource" type="s" access="read"/>
   </interface>
 </node>
