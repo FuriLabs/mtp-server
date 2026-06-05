@@ -515,11 +515,23 @@ int main(int argc, char** argv) {
 
     LOG(INFO) << "MTP server starting...";
 
-    int fd = open("/dev/mtp_usb", O_RDWR);
-    while (fd < 0) {
-        LOG(INFO) << "Couldn't open /dev/mtp_usb, waiting for device...";
-        std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+    int fd = -1;
+
+    for (int i = 0; i < 15; ++i) {
         fd = open("/dev/mtp_usb", O_RDWR);
+
+        if (fd >= 0)
+            break;
+
+        LOG(INFO) << "Couldn't open /dev/mtp_usb, attempt "
+                  << (i + 1) << "/15, waiting 1 second...";
+
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    if (fd < 0) {
+        LOG(ERROR) << "Failed to open /dev/mtp_usb after 15 attempts";
+        return 0;
     }
 
     try {
@@ -535,7 +547,7 @@ int main(int argc, char** argv) {
          * make sure to propagate the message and return with an
          * error return code.
          */
-        LOG(ERROR) << "Could not start the MTP server:" << e.what();
+        LOG(ERROR) << "Could not start the MTP server: " << e.what();
     }
 
     return 0;
