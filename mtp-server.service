@@ -3,8 +3,6 @@ Description=MTP protocol server
 After=sm.puri.Phosh.service
 StartLimitBurst=5000
 StartLimitIntervalSec=0
-ConditionPathExists=/dev/mtp_usb
-ConditionPathExists=!/home/droidian/.mtp_disable
 ConditionPathExists=!/home/furios/.mtp_disable
 
 [Service]
