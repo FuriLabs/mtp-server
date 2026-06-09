@@ -627,13 +627,19 @@ main (void)
     return 1;
   }
 
-  saved_mode = load_usb_mode ();
-  g_debug ("Applying saved USB mode: %s", saved_mode);
+  if (!is_usb_tethering_active ()) {
+    saved_mode = load_usb_mode ();
+    g_debug ("Applying saved USB mode: %s", saved_mode);
 
-  if (!apply_usb_mode (saved_mode, FALSE, &error)) {
-    g_warning ("Failed to apply saved USB mode '%s': %s", saved_mode, error->message);
-    g_clear_error (&error);
-    apply_usb_mode ("none", FALSE, NULL);
+    if (!apply_usb_mode (saved_mode, FALSE, &error)) {
+      g_warning ("Failed to apply saved USB mode '%s': %s",
+                 saved_mode,
+                 error->message);
+      g_clear_error (&error);
+      apply_usb_mode ("none", FALSE, NULL);
+    }
+  } else {
+    g_debug ("USB Tethering is active, not restoring USB mode");
   }
 
   owner_id = g_bus_own_name (

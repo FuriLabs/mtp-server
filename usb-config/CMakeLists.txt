@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 project(usb-config)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(GIO REQUIRED gio-2.0)
+pkg_check_modules(GIO REQUIRED gio-2.0 libnm)
 pkg_check_modules(LIBANDROID_PROPERTIES REQUIRED libandroid-properties)
 
 include_directories(

@@ -8,6 +8,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdlib.h>
+
+#include <libnm/NetworkManager.h>
+
 #include "utils.h"
 
 void
@@ -44,4 +47,33 @@ read_from_file (const char *path)
   fclose (file);
   buffer[strcspn (buffer, "\n")] = '\0';
   return strdup (buffer);
+}
+
+gboolean
+is_usb_tethering_active (void)
+{
+  gboolean active = FALSE;
+  const char *con_name = "USB Tethering";
+
+  NMClient *client = nm_client_new (NULL, NULL);
+  if (!client)
+      return FALSE;
+
+  const GPtrArray *active_connections = nm_client_get_active_connections (client);
+
+  for (guint i = 0; i < active_connections->len; i++) {
+    NMActiveConnection *ac = NM_ACTIVE_CONNECTION (g_ptr_array_index (active_connections, i));
+
+    NMRemoteConnection *rc = nm_active_connection_get_connection (ac);
+    if (!rc)
+      continue;
+
+    if (g_strcmp0 (nm_connection_get_id (NM_CONNECTION (rc)), con_name) == 0) {
+      active = TRUE;
+      break;
+    }
+  }
+
+  g_object_unref (client);
+  return active;
 }

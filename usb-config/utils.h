@@ -43,4 +43,7 @@ write_to_file (const char *path,
 char *
 read_from_file (const char *path);
 
+gboolean
+is_usb_tethering_active (void);
+
 #endif // UTILS_H
