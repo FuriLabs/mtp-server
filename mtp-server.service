@@ -3,7 +3,7 @@ Description=MTP protocol server
 After=sm.puri.Phosh.service
 StartLimitBurst=5000
 StartLimitIntervalSec=0
-ConditionPathExists=!/home/furios/.mtp_disable
+ConditionPathExists=/home/furios/.mtp_enable
 
 [Service]
 Type=simple
