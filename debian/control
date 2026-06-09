@@ -16,6 +16,7 @@ Build-Depends: debhelper-compat (= 13),
                libglib2.0-dev,
                libdbus-1-dev,
                libdbus-cpp-dev,
+               libnm-dev,
 Standards-Version: 4.5.0
 Homepage: http://launchpad.net/mtp
 Vcs-Bzr: https://github.com/furilabs/mtp-server
