@@ -1,7 +1,6 @@
 [Unit]
-Description=Manage USB state changes between RNDIS, MTP and None (disable configfs)
-Requires=lxc@android.service
-After=lxc@android.service
+Description=Manage USB state
+After=local-fs.target
 StartLimitBurst=5000
 StartLimitIntervalSec=0
 
@@ -14,4 +13,4 @@ TimeoutStartSec=5
 Restart=always
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target
