@@ -63,7 +63,8 @@ is_valid_usb_mode (const gchar *mode)
          g_strcmp0 (mode, "mtp") == 0 ||
          g_strcmp0 (mode, "rndis") == 0 ||
          g_strcmp0 (mode, "accessory") == 0 ||
-         g_strcmp0 (mode, "acm") == 0;
+         g_strcmp0 (mode, "acm") == 0 ||
+         g_strcmp0 (mode, "acm,rndis") == 0;
 }
 
 static gchar *
@@ -172,6 +173,7 @@ get_supported_usb_modes (void)
     "rndis",
     "accessory",
     "acm",
+    "acm,rndis",
     NULL
   };
 
@@ -337,6 +339,30 @@ configure_acm ()
   configure_gadget_strings ();
 }
 
+static void
+configure_acm_rndis ()
+{
+  g_debug ("Configuring for mode ACM + RNDIS");
+
+  setup_configfs ();
+
+  write_to_file (GADGETDIR "/UDC", "\n");
+
+  cleanup_configfs ();
+
+  mkdir (GADGETDIR "/functions/" ACMCONFIG, 0755);
+
+  write_to_file (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409/configuration", "acm,rndis");
+
+  symlink (GADGETDIR "/functions/" ACMCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" ACMCONFIG);
+
+  symlink (GADGETDIR "/functions/" RNDISCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" RNDISCONFIG);
+
+  symlink (GADGETDIR "/functions/" RNDISBAMCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" RNDISBAMCONFIG);
+
+  configure_gadget_strings ();
+}
+
 static gboolean
 apply_usb_mode (const gchar  *mode,
                 gboolean      persist,
@@ -359,6 +385,8 @@ apply_usb_mode (const gchar  *mode,
     configure_accessory ();
   else if (g_strcmp0 (mode, "acm") == 0)
     configure_acm ();
+  else if (g_strcmp0 (mode, "acm,rndis") == 0)
+    configure_acm_rndis ();
   else if (g_strcmp0 (mode, "none") == 0)
     configure_acm ();
 
