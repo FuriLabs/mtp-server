@@ -283,6 +283,28 @@ get_device_fallback (gchar *manufacturer,
     g_strlcpy (product, device, PROP_VALUE_MAX);
 }
 
+static gboolean
+android_properties_ready (void)
+{
+  struct stat st;
+
+  if (stat ("/dev/socket/property_service", &st) != 0 || !S_ISSOCK (st.st_mode))
+    return FALSE;
+
+  if (stat ("/dev/__properties__/property_info", &st) != 0 || st.st_size == 0)
+    return FALSE;
+
+  if (stat ("/dev/__properties__/properties_serial", &st) != 0 || st.st_size == 0)
+    return FALSE;
+
+  if (access (sizeof (void *) == 8 ?
+              "/apex/com.android.runtime/lib64/bionic/libc.so" :
+              "/apex/com.android.runtime/lib/bionic/libc.so", R_OK) != 0)
+    return FALSE;
+
+  return TRUE;
+}
+
 static gchar *
 get_usb_controller (void)
 {
@@ -290,7 +312,8 @@ get_usb_controller (void)
   g_autoptr (GDir) dir = NULL;
   const gchar *name;
 
-  property_get ("sys.usb.controller", controller, "");
+  if (android_properties_ready ())
+    property_get ("sys.usb.controller", controller, "");
 
   if (controller[0] != '\0')
     return g_strdup (controller);
@@ -316,9 +339,11 @@ configure_gadget_strings (void)
   char manufacturer[PROP_VALUE_MAX] = { 0 };
   char product[PROP_VALUE_MAX] = { 0 };
 
-  property_get ("ro.serialno", serialnumber, "");
-  property_get ("ro.product.vendor.manufacturer", manufacturer, "");
-  property_get ("ro.product.vendor.model", product, "");
+  if (android_properties_ready ()) {
+    property_get ("ro.serialno", serialnumber, "");
+    property_get ("ro.product.vendor.manufacturer", manufacturer, "");
+    property_get ("ro.product.vendor.model", product, "");
+  }
 
   if (manufacturer[0] == '\0' || product[0] == '\0')
     get_device_fallback (manufacturer, product);
