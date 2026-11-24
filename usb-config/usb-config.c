@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/mount.h>
+#include <mntent.h>
 #include <grp.h>
 #include <errno.h>
 
@@ -180,19 +181,55 @@ get_supported_usb_modes (void)
   return g_variant_new_strv (modes, -1);
 }
 
-static void
-setup_configfs ()
+static gboolean
+is_configfs_mounted (void)
 {
-  /* Mount configfs if not already mounted */
-  if (access (CONFIGFS, F_OK) == -1) {
-    if (mount ("none", CONFIGFS, "configfs", 0, NULL) == -1) {
-      perror ("mount");
-      return;
+  FILE *mounts;
+  struct mntent *entry;
+  gboolean mounted = FALSE;
+
+  mounts = setmntent ("/proc/mounts", "r");
+  if (mounts == NULL)
+    return FALSE;
+
+  while ((entry = getmntent (mounts)) != NULL) {
+    if (g_strcmp0 (entry->mnt_dir, CONFIGFS) == 0 &&
+        g_strcmp0 (entry->mnt_type, "configfs") == 0) {
+      mounted = TRUE;
+      break;
+    }
+  }
+
+  endmntent (mounts);
+
+  return mounted;
+}
+
+static gboolean
+setup_configfs (GError **error)
+{
+  if (!is_configfs_mounted ()) {
+    if (g_mkdir_with_parents (CONFIGFS, 0755) == -1 ||
+        (mount ("none", CONFIGFS, "configfs", 0, NULL) == -1 &&
+         !is_configfs_mounted ())) {
+      gint saved_errno = errno;
+
+      g_set_error (error,
+                   G_IO_ERROR,
+                   g_io_error_from_errno (saved_errno),
+                   "Failed to mount configfs: %s",
+                   g_strerror (saved_errno));
+      return FALSE;
     }
   }
 
   mkdir (USBGADGET, 0755);
   mkdir (GADGETDIR, 0755);
+
+  g_autofree gchar *bound_controller = read_file (GADGETDIR "/UDC", NULL);
+
+  if (bound_controller != NULL && *g_strstrip (bound_controller) != '\0')
+    write_to_file (GADGETDIR "/UDC", "\n");
 
   mkdir (GADGETDIR "/strings/0x409", 0755);
 
@@ -209,6 +246,8 @@ setup_configfs ()
   write_to_file (GADGETDIR "/idProduct", IDPRODUCT);
   write_to_file (GADGETDIR "/bcdDevice", BCDDEVICE);
   write_to_file (GADGETDIR "/bcdUSB", BCDUSB);
+
+  return TRUE;
 }
 
 static void
@@ -222,22 +261,103 @@ cleanup_configfs ()
 }
 
 static void
+get_device_fallback (gchar *manufacturer,
+                     gchar *product)
+{
+  g_autofree gchar *device = NULL;
+
+  device = read_file ("/usr/lib/furios/device/preferred-hostname", NULL);
+
+  if (device == NULL || *g_strstrip (device) == '\0') {
+    g_clear_pointer (&device, g_free);
+    device = read_file ("/usr/lib/furios/device/codename", NULL);
+  }
+
+  if (device == NULL || *g_strstrip (device) == '\0')
+    return;
+
+  if (manufacturer[0] == '\0')
+    g_strlcpy (manufacturer, device, PROP_VALUE_MAX);
+
+  if (product[0] == '\0')
+    g_strlcpy (product, device, PROP_VALUE_MAX);
+}
+
+static gchar *
+get_usb_controller (void)
+{
+  char controller[PROP_VALUE_MAX] = { 0 };
+  g_autoptr (GDir) dir = NULL;
+  const gchar *name;
+
+  property_get ("sys.usb.controller", controller, "");
+
+  if (controller[0] != '\0')
+    return g_strdup (controller);
+
+  dir = g_dir_open ("/sys/class/udc", 0, NULL);
+  if (dir == NULL)
+    return NULL;
+
+  while ((name = g_dir_read_name (dir)) != NULL) {
+    if (g_strstr_len (name, -1, "dummy") != NULL)
+      continue;
+
+    return g_strdup (name);
+  }
+
+  return NULL;
+}
+
+static void
 configure_gadget_strings (void)
 {
-  char serialnumber[PROP_VALUE_MAX];
-  char manufacturer[PROP_VALUE_MAX];
-  char product[PROP_VALUE_MAX];
-  char controller[PROP_VALUE_MAX];
+  char serialnumber[PROP_VALUE_MAX] = { 0 };
+  char manufacturer[PROP_VALUE_MAX] = { 0 };
+  char product[PROP_VALUE_MAX] = { 0 };
 
   property_get ("ro.serialno", serialnumber, "");
   property_get ("ro.product.vendor.manufacturer", manufacturer, "");
   property_get ("ro.product.vendor.model", product, "");
-  property_get ("sys.usb.controller", controller, "");
+
+  if (manufacturer[0] == '\0' || product[0] == '\0')
+    get_device_fallback (manufacturer, product);
 
   write_to_file (GADGETDIR "/strings/0x409/serialnumber", serialnumber);
   write_to_file (GADGETDIR "/strings/0x409/manufacturer", manufacturer);
   write_to_file (GADGETDIR "/strings/0x409/product", product);
+}
+
+static gboolean
+bind_gadget (GError **error)
+{
+  g_autofree gchar *controller = get_usb_controller ();
+  g_autofree gchar *bound_controller = NULL;
+  g_autofree gchar *mode_path = NULL;
+
+  if (controller == NULL) {
+    g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                         "No USB device controller found");
+    return FALSE;
+  }
+
+  mode_path = g_build_filename ("/sys/class/udc", controller,
+                                "device", "..", "mode", NULL);
+
+  if (g_file_test (mode_path, G_FILE_TEST_EXISTS))
+    write_to_file (mode_path, "peripheral");
+
   write_to_file (GADGETDIR "/UDC", controller);
+
+  bound_controller = read_file (GADGETDIR "/UDC", NULL);
+  if (bound_controller == NULL ||
+      g_strcmp0 (g_strstrip (bound_controller), controller) != 0) {
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                 "Failed to bind USB gadget to %s", controller);
+    return FALSE;
+  }
+
+  return TRUE;
 }
 
 static void
@@ -245,25 +365,11 @@ configure_mtp ()
 {
   g_debug ("Configuring for mode MTP");
 
-  setup_configfs ();
-
   write_to_file (GADGETDIR "/os_desc/use", "1");
   write_to_file (GADGETDIR "/os_desc/b_vendor_code", "0x1");
   write_to_file (GADGETDIR "/os_desc/qw_sign", "MSFT100");
 
-  char serialnumber[PROP_VALUE_MAX];
-  char manufacturer[PROP_VALUE_MAX];
-  char product[PROP_VALUE_MAX];
-  char controller[PROP_VALUE_MAX];
-
-  property_get ("ro.serialno", serialnumber, "");
-  property_get ("ro.product.vendor.manufacturer", manufacturer, "");
-  property_get ("ro.product.vendor.model", product, "");
-  property_get ("sys.usb.controller", controller, "");
-
-  write_to_file (GADGETDIR "/strings/0x409/serialnumber", serialnumber);
-  write_to_file (GADGETDIR "/strings/0x409/manufacturer", manufacturer);
-  write_to_file (GADGETDIR "/strings/0x409/product", product);
+  configure_gadget_strings ();
 
   mkdir (GADGETDIR "/functions/" MTPCONFIG, 0755);
   symlink (GADGETDIR "/configs/" CONFIGNAME, GADGETDIR "/os_desc/" CONFIGNAME);
@@ -282,15 +388,12 @@ configure_mtp ()
   symlink (GADGETDIR "/functions/" MTPCONFIG, GADGETDIR "/configs/" CONFIGNAME "/" MTPCONFIG);
 
   write_to_file (GADGETDIR "/os_desc/use", "1");
-  write_to_file (GADGETDIR "/UDC", controller);
 }
 
 static void
 configure_rndis ()
 {
   g_debug ("Configuring for mode RNDIS");
-
-  setup_configfs ();
 
   cleanup_configfs ();
 
@@ -308,8 +411,6 @@ configure_accessory ()
 {
   g_debug ("Configuring for mode Accessory");
 
-  setup_configfs ();
-
   cleanup_configfs ();
 
   write_to_file (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409/configuration", "accessory");
@@ -326,8 +427,6 @@ configure_acm ()
 {
   g_debug ("Configuring for mode ACM");
 
-  setup_configfs ();
-
   cleanup_configfs ();
 
   mkdir (GADGETDIR "/functions/" ACMCONFIG, 0755);
@@ -343,10 +442,6 @@ static void
 configure_acm_rndis ()
 {
   g_debug ("Configuring for mode ACM + RNDIS");
-
-  setup_configfs ();
-
-  write_to_file (GADGETDIR "/UDC", "\n");
 
   cleanup_configfs ();
 
@@ -377,6 +472,9 @@ apply_usb_mode (const gchar  *mode,
     return FALSE;
   }
 
+  if (!setup_configfs (error))
+    return FALSE;
+
   if (g_strcmp0 (mode, "mtp") == 0)
     configure_mtp ();
   else if (g_strcmp0 (mode, "rndis") == 0)
@@ -389,6 +487,9 @@ apply_usb_mode (const gchar  *mode,
     configure_acm_rndis ();
   else if (g_strcmp0 (mode, "none") == 0)
     configure_acm ();
+
+  if (!bind_gadget (error))
+    return FALSE;
 
   if (persist)
     save_usb_mode (mode);
