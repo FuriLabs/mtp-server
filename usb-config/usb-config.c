@@ -65,7 +65,8 @@ is_valid_usb_mode (const gchar *mode)
          g_strcmp0 (mode, "rndis") == 0 ||
          g_strcmp0 (mode, "accessory") == 0 ||
          g_strcmp0 (mode, "acm") == 0 ||
-         g_strcmp0 (mode, "acm,rndis") == 0;
+         g_strcmp0 (mode, "acm,rndis") == 0 ||
+         g_strcmp0 (mode, "meta") == 0;
 }
 
 static gchar *
@@ -175,6 +176,7 @@ get_supported_usb_modes (void)
     "accessory",
     "acm",
     "acm,rndis",
+    "meta",
     NULL
   };
 
@@ -246,6 +248,11 @@ setup_configfs (GError **error)
   write_to_file (GADGETDIR "/idProduct", IDPRODUCT);
   write_to_file (GADGETDIR "/bcdDevice", BCDDEVICE);
   write_to_file (GADGETDIR "/bcdUSB", BCDUSB);
+  write_to_file (GADGETDIR "/bDeviceClass", "0x00");
+  write_to_file (GADGETDIR "/bDeviceSubClass", "0x00");
+  write_to_file (GADGETDIR "/bDeviceProtocol", "0x00");
+  write_to_file (GADGETDIR "/configs/" CONFIGNAME "/bmAttributes", "0x80");
+  write_to_file (GADGETDIR "/os_desc/use", "0");
 
   return TRUE;
 }
@@ -483,6 +490,27 @@ configure_acm_rndis ()
   configure_gadget_strings ();
 }
 
+static void
+configure_meta (void)
+{
+  g_debug ("Configuring for mode META");
+
+  configure_acm ();
+
+  write_to_file (GADGETDIR "/idVendor", "0x0e8d");
+  write_to_file (GADGETDIR "/idProduct", "0x2007");
+
+  write_to_file (GADGETDIR "/bDeviceClass", "0x02");
+  write_to_file (GADGETDIR "/bDeviceSubClass", "0x00");
+  write_to_file (GADGETDIR "/bDeviceProtocol", "0x00");
+
+  write_to_file (GADGETDIR "/strings/0x409/manufacturer", "Android");
+  write_to_file (GADGETDIR "/strings/0x409/product", "Android");
+  write_to_file (GADGETDIR "/strings/0x409/serialnumber", "\n");
+  write_to_file (GADGETDIR "/configs/" CONFIGNAME "/bmAttributes", "0xc0");
+  write_to_file (GADGETDIR "/configs/" CONFIGNAME "/strings/0x409/configuration", "android");
+}
+
 static gboolean
 apply_usb_mode (const gchar  *mode,
                 gboolean      persist,
@@ -510,6 +538,8 @@ apply_usb_mode (const gchar  *mode,
     configure_acm ();
   else if (g_strcmp0 (mode, "acm,rndis") == 0)
     configure_acm_rndis ();
+  else if (g_strcmp0 (mode, "meta") == 0)
+    configure_meta ();
   else if (g_strcmp0 (mode, "none") == 0)
     configure_acm ();
 
@@ -551,6 +581,16 @@ read_current_state ()
   fclose (file);
 
   buffer[strcspn (buffer, "\n")] = '\0';
+
+  if (g_strcmp0 (buffer, "android") == 0) {
+    g_autofree gchar *vendor = read_file (GADGETDIR "/idVendor", NULL);
+    g_autofree gchar *product = read_file (GADGETDIR "/idProduct", NULL);
+
+    if (vendor != NULL && product != NULL &&
+        g_ascii_strtoull (vendor, NULL, 16) == 0x0e8d &&
+        g_ascii_strtoull (product, NULL, 16) == 0x2007)
+      return g_strdup ("meta");
+  }
 
   return g_strdup (buffer);
 }
