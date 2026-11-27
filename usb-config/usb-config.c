@@ -98,7 +98,8 @@ save_usb_mode (const gchar *mode)
     return;
   }
 
-  content = g_strdup_printf ("usb_mode=%s\n", mode);
+  content = g_strdup_printf ("usb_mode=%s\n",
+                             g_strcmp0 (mode, "meta") == 0 ? "acm" : mode);
 
   if (!g_file_set_contents (USB_CONFIG_CACHE_FILE, content, -1, &error)) {
     g_warning ("Failed to save USB mode to %s: %s",
@@ -145,6 +146,12 @@ load_usb_mode (void)
     g_warning ("Ignoring invalid saved USB mode '%s'", mode);
     g_free (mode);
     return g_strdup ("none");
+  }
+
+  if (g_strcmp0 (mode, "meta") == 0) {
+    g_free (mode);
+    save_usb_mode ("acm");
+    return g_strdup ("acm");
   }
 
   return mode;
